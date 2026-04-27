@@ -2255,20 +2255,20 @@ function refreshCommPayoutSummary() {
     let totalSetter = 0, totalCloser = 0, totalPaid = 0, totalOnHold = 0;
     source.forEach(rec => {
       const f = rec.fields || {};
-      const deal      = parseFloat(f['Deal Amount'] || 0);
       const setter    = f['Setter'] || '';
       const closer    = f['Closer'] || '';
-      const aiSet     = !!f['AI Setter'];
       const isDeposit = (f['Payment Type'] || 'Full Payment') === 'Deposit';
-      const comm      = calcComm(deal, setter, closer, aiSet);
       const status    = f['Status'] || 'Pending';
+      // Use stored commission fields — authoritative values from WF03
+      const sAmt = parseFloat(f['Setter Commission $'] || 0);
+      const cAmt = parseFloat(f['Closer Commission $'] || 0);
       let earned = 0;
-      if (setter === rep) earned += comm.sAmt;
-      if (closer === rep) earned += comm.cAmt;
+      if (setter === rep) earned += sAmt;
+      if (closer === rep) earned += cAmt;
       if (!earned) return;
       if (isDeposit) { totalOnHold += earned; return; }
-      if (setter === rep) totalSetter += comm.sAmt;
-      if (closer === rep) totalCloser += comm.cAmt;
+      if (setter === rep) totalSetter += sAmt;
+      if (closer === rep) totalCloser += cAmt;
       if (status === 'Paid') totalPaid += earned;
     });
     const grandTotal = totalSetter + totalCloser;
@@ -2292,7 +2292,7 @@ function refreshCommPayoutSummary() {
     <th class="r" style="color:#a78bfa;">As Closer</th>
     <th class="r" style="color:#f59e0b;">Pending</th>
     <th class="r" style="color:#6b7280;">On Hold (Deposits)</th>
-  </tr></thead><tbody>${repPayoutRows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>'}</tbody>`;
+  </tr></thead><tbody>${repPayoutRows || `<tr><td colspan="6" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>`}</tbody>`;
 }
 
 function renderCommissions() {
