@@ -833,7 +833,10 @@ const D = {
   },
   in(dateStr, r) {
     if (!dateStr) return false;
-    const d = new Date(dateStr);
+    // Date-only strings (YYYY-MM-DD) must be parsed as local time, not UTC
+    const d = typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
+      ? new Date(dateStr + 'T00:00:00')
+      : new Date(dateStr);
     return d >= r.s && d <= r.e;
   },
   fmt(dateStr) {
@@ -2067,32 +2070,40 @@ function renderLeaderboard() {
   const r = D.range(range || 'month');
 
   const calls = DB.calls.filter(c => D.in(fv(c,'Call Date'), r));
+  const comms = DB.commissions.filter(c => {
+    const isDeposit = (fv(c,'Payment Type') || 'Full Payment') === 'Deposit';
+    return !isDeposit && D.in(fv(c,'Close Date'), r);
+  });
 
   const CLOSERS = ['Will','Alen','Max'];
   const SETTERS = ['Max','Ben'];
 
-  // Build per-closer stats
+  // Build per-closer stats — deal volume from commissions, show/show-rate from calls
   const closerStats = CLOSERS.map(name => {
-    const mine = calls.filter(c => fv(c,'Closer') === name);
-    const shows = mine.filter(c => fv(c,'Show') === true).length;
-    const closes = mine.filter(c => fv(c,'Outcome') === 'Closed').length;
-    const booked = mine.length;
-    const cash = mine.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
+    const myCalls = calls.filter(c => fv(c,'Closer') === name);
+    const myComms = comms.filter(c => fv(c,'Closer') === name);
+    const shows    = myCalls.filter(c => fv(c,'Show') === true).length;
+    const booked   = myCalls.length;
+    const closes   = myComms.length;
+    const cash     = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
+    const comm     = myComms.reduce((s,c) => s + calcComm(parseFloat(fv(c,'Deal Amount')||0), fv(c,'Setter'), name, fv(c,'AI Setter')===true).cAmt, 0);
     const closeRate = shows > 0 ? closes/shows : 0;
     const showRate  = booked > 0 ? shows/booked : 0;
-    return { name, booked, shows, closes, cash, closeRate, showRate };
+    return { name, booked, shows, closes, cash, comm, closeRate, showRate };
   }).sort((a,b) => b.cash - a.cash || b.closes - a.closes);
 
-  // Build per-setter stats
+  // Build per-setter stats — deal volume from commissions, booked/show-rate from calls
   const setterStats = SETTERS.map(name => {
-    const mine = calls.filter(c => fv(c,'Setter') === name);
-    const shows = mine.filter(c => fv(c,'Show') === true).length;
-    const closes = mine.filter(c => fv(c,'Outcome') === 'Closed').length;
-    const booked = mine.length;
-    const cashGen = mine.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
+    const myCalls = calls.filter(c => fv(c,'Setter') === name);
+    const myComms = comms.filter(c => fv(c,'Setter') === name);
+    const shows   = myCalls.filter(c => fv(c,'Show') === true).length;
+    const booked  = myCalls.length;
+    const closes  = myComms.length;
+    const cashGen = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
+    const comm    = myComms.reduce((s,c) => s + calcComm(parseFloat(fv(c,'Deal Amount')||0), name, fv(c,'Closer'), fv(c,'AI Setter')===true).sAmt, 0);
     const showRate = booked > 0 ? shows/booked : 0;
-    return { name, booked, shows, closes, cashGen, showRate };
-  }).sort((a,b) => b.booked - a.booked);
+    return { name, booked, shows, closes, cashGen, comm, showRate };
+  }).sort((a,b) => b.cashGen - a.cashGen);
 
   const MEDALS = ['🥇','🥈','🥉'];
   const RANK_COLORS = ['#f59e0b','#9ca3af','#cd7f32'];
@@ -2111,7 +2122,8 @@ function renderLeaderboard() {
           <div style="font-size:13px; color:#78716c; margin-top:3px;">${streak}</div>
         </div>
         <div style="display:flex; gap:28px; text-align:center;">
-          <div><div style="font-size:22px; font-weight:800; color:#fff;">${F.$(mvp.cash)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Cash In</div></div>
+          <div><div style="font-size:22px; font-weight:800; color:#fff;">${F.$(mvp.cash)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Deal Volume</div></div>
+          <div><div style="font-size:22px; font-weight:800; color:#10b981;">${F.$(mvp.comm)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Earned</div></div>
           <div><div style="font-size:22px; font-weight:800; color:${mvp.closeRate>=CFG.goals.closeRate?'#10b981':'#ef4444'}">${F.pct(mvp.closeRate)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Close Rate</div></div>
           <div><div style="font-size:22px; font-weight:800; color:#fff;">${mvp.closes}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Deals</div></div>
         </div>
@@ -2133,6 +2145,7 @@ function renderLeaderboard() {
       <td style="width:32px; font-size:20px; padding:14px 8px 14px 16px;">${medal}</td>
       <td style="font-weight:700; font-size:15px; color:${RANK_COLORS[i]||'#d1d5db'};">${s.name}</td>
       <td class="r" style="color:#fff; font-weight:700;">${F.$(s.cash)}</td>
+      <td class="r" style="color:#10b981; font-weight:700;">${F.$(s.comm)}</td>
       <td class="r" style="color:#d1d5db;">${s.closes}</td>
       <td class="r" style="color:#d1d5db;">${s.shows}</td>
       <td class="r" style="color:#d1d5db;">${s.booked}</td>
@@ -2153,10 +2166,10 @@ function renderLeaderboard() {
         <thead><tr>
           <th style="width:32px;"></th>
           <th>Rep</th>
-          <th class="r">Cash In</th><th class="r">Deals</th><th class="r">Shows</th><th class="r">Booked</th>
-          <th class="r">Close Rate</th><th class="r">Show Rate</th><th>Revenue Bar</th>
+          <th class="r">Deal Volume</th><th class="r" style="color:#10b981;">Earned</th><th class="r">Deals</th><th class="r">Shows</th><th class="r">Booked</th>
+          <th class="r">Close Rate</th><th class="r">Show Rate</th><th>Volume Bar</th>
         </tr></thead>
-        <tbody>${closerRows || '<tr><td colspan="9" style="text-align:center;padding:32px;color:#4b5563;">No closer data this period</td></tr>'}</tbody>
+        <tbody>${closerRows || '<tr><td colspan="10" style="text-align:center;padding:32px;color:#4b5563;">No closer data this period</td></tr>'}</tbody>
       </table>
     </div>
     <div style="display:flex; gap:16px; margin-top:8px; font-size:11px; color:#4b5563;">
@@ -2180,6 +2193,7 @@ function renderLeaderboard() {
       <td class="r" style="color:#d1d5db;">${s.closes}</td>
       <td class="r" style="color:${srColor}; font-weight:600;">${s.booked>0?F.pct(s.showRate):'—'}</td>
       <td class="r" style="color:#fff; font-weight:600;">${F.$(s.cashGen)}</td>
+      <td class="r" style="color:#10b981; font-weight:700;">${F.$(s.comm)}</td>
       <td style="min-width:120px; padding-right:20px;">
         <div style="height:5px; background:#1e1e1e; border-radius:99px; overflow:hidden;">
           <div style="height:100%; width:${barW}%; background:linear-gradient(90deg,#60a5fa,#3b82f6); border-radius:99px;"></div>
@@ -2196,9 +2210,9 @@ function renderLeaderboard() {
           <th style="width:32px;"></th>
           <th>Rep</th>
           <th class="r">Calls Set</th><th class="r">Shows</th><th class="r">Closes</th>
-          <th class="r">Show Rate</th><th class="r">Cash Generated</th><th>Booking Bar</th>
+          <th class="r">Show Rate</th><th class="r">Deal Volume</th><th class="r" style="color:#10b981;">Earned</th><th>Booking Bar</th>
         </tr></thead>
-        <tbody>${setterRows || '<tr><td colspan="8" style="text-align:center;padding:32px;color:#4b5563;">No setter data this period</td></tr>'}</tbody>
+        <tbody>${setterRows || '<tr><td colspan="9" style="text-align:center;padding:32px;color:#4b5563;">No setter data this period</td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -2229,15 +2243,17 @@ async function patchCommission(recordId, fields) {
 }
 
 function refreshCommPayoutSummary() {
-  // Re-render just the payout summary table without touching the deal rows
-  const allPeriods = [...new Set(DB.commissions.map(r => fv(r,'Pay Period')).filter(Boolean))].sort();
+  const filterPeriod = document.getElementById('comm-period')?.value || '';
   const REPS = ['Max','Ben','Will','Alen'];
   const REP_ROLES = { Max:'Setter + Closer', Ben:'Setter', Will:'Closer', Alen:'Closer' };
 
+  const source = filterPeriod
+    ? DB.commissions.filter(r => (fv(r,'Pay Period') || '') === filterPeriod)
+    : DB.commissions;
+
   const repPayoutRows = REPS.map(rep => {
     let totalSetter = 0, totalCloser = 0, totalPaid = 0, totalOnHold = 0;
-    const byPeriod = {};
-    DB.commissions.forEach(rec => {
+    source.forEach(rec => {
       const f = rec.fields || {};
       const deal      = parseFloat(f['Deal Amount'] || 0);
       const setter    = f['Setter'] || '';
@@ -2246,7 +2262,6 @@ function refreshCommPayoutSummary() {
       const isDeposit = (f['Payment Type'] || 'Full Payment') === 'Deposit';
       const comm      = calcComm(deal, setter, closer, aiSet);
       const status    = f['Status'] || 'Pending';
-      const pp        = f['Pay Period'] || '';
       let earned = 0;
       if (setter === rep) earned += comm.sAmt;
       if (closer === rep) earned += comm.cAmt;
@@ -2255,35 +2270,29 @@ function refreshCommPayoutSummary() {
       if (setter === rep) totalSetter += comm.sAmt;
       if (closer === rep) totalCloser += comm.cAmt;
       if (status === 'Paid') totalPaid += earned;
-      byPeriod[pp] = (byPeriod[pp] || 0) + earned;
     });
     const grandTotal = totalSetter + totalCloser;
     const pending = grandTotal - totalPaid;
     if (grandTotal === 0 && totalOnHold === 0) return null;
-    const periodCells = allPeriods.map(pp => `<td class="r" style="color:#d1d5db;">${F.$(byPeriod[pp]||0)}</td>`).join('');
     return `<tr>
       <td style="font-weight:700;color:#fff;">${rep}</td>
       <td style="color:#6b7280;font-size:12px;">${REP_ROLES[rep]||''}</td>
       <td class="r" style="color:#60a5fa;">${F.$(totalSetter)}</td>
       <td class="r" style="color:#a78bfa;">${F.$(totalCloser)}</td>
-      ${periodCells}
-      <td class="r" style="font-weight:800;color:#10b981;font-size:15px;">${F.$(grandTotal)}</td>
       <td class="r" style="color:#f59e0b;font-weight:600;">${F.$(pending)}</td>
       <td class="r" style="color:#6b7280;font-size:12px;" title="Held until full payment received">${totalOnHold>0?F.$(totalOnHold):'—'}</td>
     </tr>`;
   }).filter(Boolean).join('');
 
-  const periodHeaders = allPeriods.map(p => `<th class="r">${p}</th>`).join('');
+  const periodLabel = filterPeriod || 'All Periods';
   const el = document.getElementById('comm-payout-table');
   if (el) el.innerHTML = `<thead><tr>
     <th>Rep</th><th>Role</th>
     <th class="r" style="color:#60a5fa;">As Setter</th>
     <th class="r" style="color:#a78bfa;">As Closer</th>
-    ${periodHeaders}
-    <th class="r" style="color:#10b981;">Total Earned</th>
     <th class="r" style="color:#f59e0b;">Pending</th>
     <th class="r" style="color:#6b7280;">On Hold (Deposits)</th>
-  </tr></thead><tbody>${repPayoutRows || '<tr><td colspan="9" style="text-align:center;padding:24px;color:#4b5563;">No commissions yet.</td></tr>'}</tbody>`;
+  </tr></thead><tbody>${repPayoutRows || '<tr><td colspan="6" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>'}</tbody>`;
 }
 
 function renderCommissions() {
