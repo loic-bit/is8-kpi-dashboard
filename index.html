@@ -185,6 +185,10 @@
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
         Commissions
       </div>
+      <div class="nav-item" data-view="health">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        System Health
+      </div>
     </nav>
 
     <div style="padding:14px 12px; border-top:1px solid #1a1a1a;">
@@ -670,6 +674,15 @@
       <div id="comm-totals" style="margin-top:12px; padding:14px 16px; background:#111; border:1px solid #1e1e1e; border-radius:10px; display:flex; gap:24px; flex-wrap:wrap;"></div>
     </div>
 
+    <div id="view-health" class="view" style="padding:28px 32px;">
+      <div style="margin-bottom:24px;">
+        <h1 style="font-size:20px; font-weight:700; color:#fff;">System Health</h1>
+        <p style="font-size:13px; color:#6b7280; margin-top:3px;">Live connection status and data accuracy checks</p>
+      </div>
+      <div id="health-panel" style="display:grid; grid-template-columns:1fr 1fr; gap:16px;"></div>
+      <div id="health-data-audit" style="margin-top:24px;"></div>
+    </div>
+
   </div><!-- /main -->
 </div><!-- /app -->
 
@@ -836,6 +849,18 @@ function setRefreshing(on) {
 
 // field helper
 const fv = (rec, field) => rec?.fields?.[field] ?? null;
+
+// Show derivation: Show field set by Fathom (true/false), or derived from Outcome
+// No-Show / Cancelled = didn't show. Any other Outcome set = showed. Empty = unknown.
+const isShow = (c) => {
+  const show = fv(c, 'Show');
+  if (show === true) return true;
+  if (show === false) return false;
+  const outcome = fv(c, 'Outcome') || '';
+  if (['No-Show', 'Cancelled'].includes(outcome)) return false;
+  if (outcome.length > 0) return true;
+  return false;
+};
 
 // ═══════════════════════════════════════════════════════════
 // DATE UTILITIES
@@ -1107,12 +1132,13 @@ function renderScorecard() {
   const callsP  = DB.calls.filter(rec => D.in(fv(rec,'Call Date'), rp));
   const booked  = calls.length;
   const bookedP = callsP.length;
-  const shows   = calls.filter(c => fv(c,'Show') === true).length;
-  const showsP  = callsP.filter(c => fv(c,'Show') === true).length;
+  const shows   = calls.filter(c => isShow(c)).length;
+  const showsP  = callsP.filter(c => isShow(c)).length;
   const closes  = calls.filter(c => fv(c,'Outcome') === 'Closed').length;
   const closesP = callsP.filter(c => fv(c,'Outcome') === 'Closed').length;
-  const rev     = calls.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
-  const revP    = callsP.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
+  // Revenue from Commissions (Whop source of truth — Whop Payment ID required)
+  const rev  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in((c.createdTime||'').split('T')[0], r)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+  const revP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in((c.createdTime||'').split('T')[0], rp)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   const showRate   = booked > 0 ? shows / booked : 0;
   const showRateP  = bookedP > 0 ? showsP / bookedP : 0;
@@ -1285,7 +1311,7 @@ function renderCalls() {
   if (type)    calls = calls.filter(c => fv(c,'Call Type') === type);
   calls.sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
 
-  const shows  = calls.filter(c => fv(c,'Show') === true).length;
+  const shows  = calls.filter(c => isShow(c)).length;
   const closes = calls.filter(c => fv(c,'Outcome') === 'Closed').length;
   const rev    = calls.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
 
@@ -1296,7 +1322,7 @@ function renderCalls() {
   // prev period for trends
   const pr = prevRange(document.getElementById('calls-range').value);
   const prevCalls  = DB.calls.filter(c => D.in(fv(c,'Call Date'), pr));
-  const prevShows  = prevCalls.filter(c => fv(c,'Show') === true).length;
+  const prevShows  = prevCalls.filter(c => isShow(c)).length;
   const prevCloses = prevCalls.filter(c => fv(c,'Outcome') === 'Closed').length;
   const prevShowRate  = prevCalls.length ? prevShows / prevCalls.length : 0;
   const prevCloseRate = prevShows ? prevCloses / prevShows : 0;
@@ -1319,7 +1345,7 @@ function renderCalls() {
     const cl = fv(c,'Closer') || (fv(c,'Show') ? 'Unattributed' : null);
     if (!cl) return;
     if (!closerStats[cl]) closerStats[cl] = { shows:0, closes:0, rev:0, noShows:0 };
-    if (fv(c,'Show') === true)       closerStats[cl].shows++;
+    if (isShow(c))       closerStats[cl].shows++;
     if (fv(c,'Outcome')==='Closed')  { closerStats[cl].closes++; closerStats[cl].rev += fv(c,'Cash Collected')||0; }
     if (fv(c,'Outcome')==='No-Show') closerStats[cl].noShows++;
   });
@@ -1341,7 +1367,7 @@ function renderCalls() {
     if (!s) return;
     if (!setterStats[s]) setterStats[s] = { booked:0, shows:0, closes:0, rev:0 };
     setterStats[s].booked++;
-    if (fv(c,'Show') === true)      setterStats[s].shows++;
+    if (isShow(c))      setterStats[s].shows++;
     if (fv(c,'Outcome')==='Closed') { setterStats[s].closes++; setterStats[s].rev += fv(c,'Cash Collected')||0; }
   });
   const setterRows = Object.entries(setterStats)
@@ -2108,7 +2134,7 @@ function renderLeaderboard() {
   const closerStats = CLOSERS.map(name => {
     const myCalls = calls.filter(c => fv(c,'Closer') === name);
     const myComms = comms.filter(c => fv(c,'Closer') === name);
-    const shows    = myCalls.filter(c => fv(c,'Show') === true).length;
+    const shows    = myCalls.filter(c => isShow(c)).length;
     const booked   = myCalls.length;
     const closes   = myComms.length;
     const cash     = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
@@ -2122,7 +2148,7 @@ function renderLeaderboard() {
   const setterStats = SETTERS.map(name => {
     const myCalls = calls.filter(c => fv(c,'Setter') === name);
     const myComms = comms.filter(c => fv(c,'Setter') === name);
-    const shows   = myCalls.filter(c => fv(c,'Show') === true).length;
+    const shows   = myCalls.filter(c => isShow(c)).length;
     const booked  = myCalls.length;
     const closes  = myComms.length;
     const cashGen = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
@@ -2557,8 +2583,90 @@ function renderCurrent() {
     revenue:     renderRevenue,
     leaderboard: renderLeaderboard,
     commissions: renderCommissions,
+    health:      renderHealth,
   };
   if (map[currentView]) map[currentView]();
+}
+
+// ═══════════════════════════════════════════════════════════
+// VIEW: SYSTEM HEALTH
+// ═══════════════════════════════════════════════════════════
+async function renderHealth() {
+  const panel = document.getElementById('health-panel');
+  const audit = document.getElementById('health-data-audit');
+  panel.innerHTML = '<div style="color:#6b7280; grid-column:1/-1;">Running checks...</div>';
+
+  const AT = CFG.token;
+  const BASE = CFG.baseId;
+
+  const checks = [];
+
+  const checkHttp = async (name, fn) => {
+    try { const ok = await fn(); checks.push({ name, ok, detail: ok ? 'Connected' : 'No data returned' }); }
+    catch(e) { checks.push({ name, ok: false, detail: e.message?.slice(0,80) || 'Error' }); }
+  };
+
+  // 1. Airtable connection
+  await checkHttp('Airtable', async () => {
+    const r = await fetch(`https://api.airtable.com/v0/${BASE}/${CFG.tables.commissions}?maxRecords=1`, { headers: { Authorization: `Bearer ${AT}` } });
+    return r.ok;
+  });
+
+  // 2. Whop connection
+  await checkHttp('Whop API', async () => {
+    const r = await fetch('https://api.whop.com/api/v2/memberships?limit=1', { headers: { Authorization: 'Bearer apik_lOhE1qIEAEReG_C1291826_Vy2bFRmj8jlPqgNB6NJyh-im2rSGYD57pKXaCfx4gOg' } });
+    const d = await r.json();
+    return !!d.data;
+  });
+
+  // 3. Data freshness — last Opt-in
+  const lastOptin = DB.optins.length > 0
+    ? DB.optins.reduce((a,b) => (a.createdTime||'') > (b.createdTime||'') ? a : b)
+    : null;
+  checks.push({ name: 'Last Opt-in', ok: !!lastOptin,
+    detail: lastOptin ? `${fv(lastOptin,'Lead Name')} — ${(lastOptin.createdTime||'').slice(0,10)}` : 'No data' });
+
+  // 4. Data freshness — last Call booked
+  const lastCall = DB.calls.length > 0
+    ? DB.calls.reduce((a,b) => (a.createdTime||'') > (b.createdTime||'') ? a : b)
+    : null;
+  checks.push({ name: 'Last Call Booked', ok: !!lastCall,
+    detail: lastCall ? `${fv(lastCall,'Lead Name')} — ${(lastCall.createdTime||'').slice(0,10)}` : 'No data' });
+
+  // 5. Revenue data — commissions with Whop ID
+  const whopPays = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0);
+  checks.push({ name: 'Whop Payments in DB', ok: whopPays.length > 0,
+    detail: `${whopPays.length} payments tracked` });
+
+  // 6. Show tracking gap
+  const noShowField = DB.calls.filter(c => fv(c,'Show') === null || fv(c,'Show') === undefined);
+  const showGap = noShowField.length;
+  checks.push({ name: 'Show Tracking', ok: showGap < DB.calls.length * 0.5,
+    detail: showGap === DB.calls.length ? 'Fathom integration needed — deriving from Outcome' : `${DB.calls.length - showGap} of ${DB.calls.length} tracked` });
+
+  // 7. Source tracking gap
+  const noSrc = DB.calls.filter(c => !fv(c,'Lead Source'));
+  checks.push({ name: 'Lead Source Coverage', ok: noSrc.length < 10,
+    detail: `${noSrc.length} calls missing source (${DB.calls.length - noSrc.length} of ${DB.calls.length} tracked)` });
+
+  const dot = (ok) => `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${ok?'#10b981':'#ef4444'};margin-right:8px;flex-shrink:0;"></span>`;
+
+  panel.innerHTML = checks.map(c => `
+    <div style="background:#111;border:1px solid ${c.ok?'#1a2e1a':'#2e1a1a'};border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:12px;">
+      ${dot(c.ok)}
+      <div>
+        <div style="font-weight:600;color:#fff;font-size:13px;">${c.name}</div>
+        <div style="font-size:12px;color:${c.ok?'#6b7280':'#f87171'};margin-top:2px;">${c.detail}</div>
+      </div>
+    </div>
+  `).join('');
+
+  const allOk = checks.every(c => c.ok);
+  const failCount = checks.filter(c => !c.ok).length;
+  audit.innerHTML = `
+    <div style="background:${allOk?'rgba(16,185,129,0.08)':'rgba(239,68,68,0.08)'};border:1px solid ${allOk?'rgba(16,185,129,0.2)':'rgba(239,68,68,0.25)'};border-radius:10px;padding:14px 18px;font-size:13px;color:${allOk?'#34d399':'#f87171'};">
+      ${allOk ? '✓ All systems operational' : `${failCount} check${failCount>1?'s':''} need attention — review items above`}
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2629,7 +2737,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Keyboard shortcuts (1-6)
   document.addEventListener('keydown', e => {
     if (!Auth.check() || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    const views = ['scorecard','calls','meta','optins','dials','speed','revenue','leaderboard','commissions'];
+    const views = ['scorecard','calls','meta','optins','dials','speed','revenue','leaderboard','commissions','health'];
     const i = parseInt(e.key) - 1;
     if (i >= 0 && i < views.length) navigate(views[i]);
   });
