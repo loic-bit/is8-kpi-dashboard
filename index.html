@@ -2275,7 +2275,7 @@ function refreshCommPayoutSummary() {
     : DB.commissions;
 
   const repPayoutRows = REPS.map(rep => {
-    let totalSetter = 0, totalCloser = 0, totalPaid = 0, totalOnHold = 0;
+    let totalSetter = 0, totalCloser = 0, totalApproved = 0, totalPaid = 0, totalOnHold = 0;
     source.forEach(rec => {
       const f = rec.fields || {};
       const setter    = f['Setter'] || '';
@@ -2294,17 +2294,19 @@ function refreshCommPayoutSummary() {
       if (isDeposit) { totalOnHold += earned; return; }
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
+      if (status === 'Approved') totalApproved += earned;
       if (status === 'Paid') totalPaid += earned;
     });
     const grandTotal = totalSetter + totalCloser;
-    const pending = grandTotal - totalPaid;
     if (grandTotal === 0 && totalOnHold === 0) return null;
+    const paidColor = totalPaid > 0 ? '#10b981' : '#4b5563';
     return `<tr>
       <td style="font-weight:700;color:#fff;">${rep}</td>
       <td style="color:#6b7280;font-size:12px;">${REP_ROLES[rep]||''}</td>
       <td class="r" style="color:#60a5fa;">${F.$(totalSetter)}</td>
       <td class="r" style="color:#a78bfa;">${F.$(totalCloser)}</td>
-      <td class="r" style="color:#f59e0b;font-weight:600;">${F.$(pending)}</td>
+      <td class="r" style="color:#3b82f6;font-weight:600;">${totalApproved > 0 ? F.$(totalApproved) : '—'}</td>
+      <td class="r" style="color:${paidColor};font-size:12px;">${totalPaid > 0 ? F.$(totalPaid) : '—'}</td>
       <td class="r" style="color:#6b7280;font-size:12px;" title="Held until full payment received">${totalOnHold>0?F.$(totalOnHold):'—'}</td>
     </tr>`;
   }).filter(Boolean).join('');
@@ -2315,9 +2317,10 @@ function refreshCommPayoutSummary() {
     <th>Rep</th><th>Role</th>
     <th class="r" style="color:#60a5fa;">As Setter</th>
     <th class="r" style="color:#a78bfa;">As Closer</th>
-    <th class="r" style="color:#f59e0b;">Pending</th>
+    <th class="r" style="color:#3b82f6;">Approved (Pay Now)</th>
+    <th class="r" style="color:#10b981;">Paid</th>
     <th class="r" style="color:#6b7280;">On Hold (Deposits)</th>
-  </tr></thead><tbody>${repPayoutRows || `<tr><td colspan="6" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>`}</tbody>`;
+  </tr></thead><tbody>${repPayoutRows || `<tr><td colspan="7" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>`}</tbody>`;
 }
 
 function renderCommissions() {
@@ -2354,9 +2357,12 @@ function renderCommissions() {
     return { rec, f, deal, setter, closer, aiSet, comm };
   });
 
-  const pendingTotal = withComm
-    .filter(x => (x.f['Status']||'Pending') === 'Pending')
+  const approvedTotal = withComm
+    .filter(x => (x.f['Status']||'Pending') === 'Approved' && (x.f['Payment Type']||'Full Payment') !== 'Deposit')
     .reduce((s,x) => s + x.comm.total, 0);
+  const unassignedCount = withComm
+    .filter(x => (x.f['Status']||'Pending') === 'Pending' && (x.f['Payment Type']||'Full Payment') !== 'Deposit' && (!x.setter || !x.closer))
+    .length;
 
   const bannerColor = daysUntil <= 3 ? '#ef4444' : daysUntil <= 7 ? '#f59e0b' : '#10b981';
   document.getElementById('comm-payout-banner').innerHTML = `
@@ -2365,7 +2371,10 @@ function renderCommissions() {
         <div style="width:8px; height:8px; border-radius:50%; background:${bannerColor};"></div>
         <span style="font-size:13px; color:#d1d5db; font-weight:500;">Next payout: <strong style="color:#fff;">${nextPayoutLabel}</strong> <span style="color:#6b7280;">&nbsp;·&nbsp; ${daysUntil} day${daysUntil!==1?'s':''} away</span></span>
       </div>
-      <span style="font-size:13px; color:#d1d5db;">Total pending: <strong style="color:${bannerColor};">${F.$(pendingTotal)}</strong></span>
+      <div style="display:flex; gap:20px; align-items:center;">
+        <span style="font-size:13px; color:#d1d5db;">Approved to pay: <strong style="color:#3b82f6;">${F.$(approvedTotal)}</strong></span>
+        ${unassignedCount > 0 ? `<span style="font-size:12px; color:#f59e0b;">&#9888; ${unassignedCount} deal${unassignedCount!==1?'s':''} need assignment</span>` : ''}
+      </div>
     </div>`;
 
   // ── Rep Payout Table ────────────────────────────────────────────────────
