@@ -2282,9 +2282,11 @@ function refreshCommPayoutSummary() {
       const closer    = f['Closer'] || '';
       const isDeposit = (f['Payment Type'] || 'Full Payment') === 'Deposit';
       const status    = f['Status'] || 'Pending';
-      // Use stored commission fields — authoritative values from WF03
-      const sAmt = parseFloat(f['Setter Commission $'] || 0);
-      const cAmt = parseFloat(f['Closer Commission $'] || 0);
+      const deal      = parseFloat(f['Deal Amount'] || 0);
+      const aiSet     = !!f['AI Setter'];
+      const comm      = calcComm(deal, setter, closer, aiSet);
+      const sAmt = comm.sAmt;
+      const cAmt = comm.cAmt;
       let earned = 0;
       if (setter === rep) earned += sAmt;
       if (closer === rep) earned += cAmt;
