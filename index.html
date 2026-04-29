@@ -1137,8 +1137,9 @@ function renderScorecard() {
   const closes  = calls.filter(c => fv(c,'Outcome') === 'Closed').length;
   const closesP = callsP.filter(c => fv(c,'Outcome') === 'Closed').length;
   // Revenue from Commissions (Whop source of truth — Whop Payment ID required)
-  const rev  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in((c.createdTime||'').split('T')[0], r)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
-  const revP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in((c.createdTime||'').split('T')[0], rp)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+  const commDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
+  const rev  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+  const revP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), rp)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   const showRate   = booked > 0 ? shows / booked : 0;
   const showRateP  = bookedP > 0 ? showsP / bookedP : 0;
@@ -1735,13 +1736,13 @@ function renderRevenue() {
   const r = D.range(document.getElementById('rev-range').value);
 
   // Source of truth: Commissions table — only real Whop payments (must have Whop Payment ID)
+  // Use Close Date (actual deal date) not createdTime (Airtable record creation date)
+  const revDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
   const payments = DB.commissions
     .filter(c => {
       const amount = fv(c,'Deal Amount') || 0;
-      const created = c.createdTime || '';
-      const dateStr = created.split('T')[0];
       const whopId = fv(c,'Whop Payment ID') || '';
-      return amount > 0 && whopId.length > 0 && D.in(dateStr, r);
+      return amount > 0 && whopId.length > 0 && D.in(revDate(c), r);
     })
     .sort((a,b) => new Date(b.createdTime||0) - new Date(a.createdTime||0));
 
@@ -1792,7 +1793,7 @@ function renderRevenue() {
   const cumRevData = days.map((d, i) => {
     if (i >= daysElapsed) return null;
     const dayRev = payments
-      .filter(c => (c.createdTime||'').split('T')[0] === D.key(d))
+      .filter(c => revDate(c) === D.key(d))
       .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
     cumRev += dayRev;
     return cumRev;
@@ -1825,7 +1826,7 @@ function renderRevenue() {
   document.getElementById('rev-tbody').innerHTML = payments.map(c => `
     <tr>
       <td style="color:#fff;font-weight:500;">${fv(c,'Lead Name') || '—'}</td>
-      <td>${D.fmt((c.createdTime||'').split('T')[0])}</td>
+      <td>${D.fmt(revDate(c))}</td>
       <td>${fv(c,'Closer') ? `<span class="badge badge-amber">${fv(c,'Closer')}</span>` : '<span class="badge badge-gray">—</span>'}</td>
       <td><span class="badge ${STATUS_CLS[fv(c,'Status')]||'badge-gray'}">${fv(c,'Status')||'Pending'}</span></td>
       <td class="r" style="font-weight:700; color:#f59e0b;">${F.$(fv(c,'Deal Amount')||0)}</td>
