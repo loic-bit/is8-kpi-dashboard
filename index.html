@@ -142,7 +142,10 @@
   <aside id="sidebar">
     <div style="padding:20px 16px 16px; border-bottom:1px solid #1a1a1a;">
       <div style="font-size:10px; font-weight:700; letter-spacing:0.12em; color:#6b7280; text-transform:uppercase; margin-bottom:3px;">Scale Wise Media</div>
-      <div style="font-size:14px; font-weight:700; color:#fff;">Joseph KPI</div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div style="font-size:14px; font-weight:700; color:#fff;">Joseph KPI</div>
+        <span id="health-dot" title="System status" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#4b5563; flex-shrink:0; transition:background 0.4s;"></span>
+      </div>
     </div>
 
     <nav style="flex:1; padding:12px 8px; display:flex; flex-direction:column; gap:2px;">
@@ -762,12 +765,21 @@ async function fetchTable(tableId, formula = '') {
 const DB = { leads: [], calls: [], callLog: [], dms: [], meta: [], optins: [], commissions: [] };
 let loaded = false, loading = false;
 
+function setHealthDot(status) {
+  const dot = document.getElementById('health-dot');
+  if (!dot) return;
+  const colors = { loading: '#f59e0b', ok: '#10b981', error: '#ef4444', idle: '#4b5563' };
+  dot.style.background = colors[status] || colors.idle;
+  dot.title = { loading: 'Loading data...', ok: 'All systems operational', error: 'Data load failed', idle: 'Not loaded' }[status] || '';
+}
+
 async function loadData(force = false) {
   if (loading) return;
   if (loaded && !force) return;
   if (force) Cache.clear();
   loading = true;
   setRefreshing(true);
+  setHealthDot('loading');
 
   try {
     const f90lead  = "IS_AFTER({Date Added}, DATEADD(TODAY(), -90, 'days'))";
@@ -784,12 +796,25 @@ async function loadData(force = false) {
       fetchTable(CFG.tables.commissions),
     ]);
 
+    // Strip test records from all tables at load time
+    const isTest = r => {
+      const name = (fv(r,'Lead Name')||fv(r,'Name')||'').toLowerCase();
+      const email = (fv(r,'Email')||fv(r,'Lead Email')||'').toLowerCase();
+      return name.includes('test') || email.includes('test');
+    };
+    DB.leads       = DB.leads.filter(r => !isTest(r));
+    DB.calls       = DB.calls.filter(r => !isTest(r));
+    DB.optins      = DB.optins.filter(r => !isTest(r));
+    DB.commissions = DB.commissions.filter(r => !isTest(r));
+
     loaded = true;
+    setHealthDot('ok');
     document.getElementById('last-synced').textContent =
       new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     renderCurrent();
   } catch(e) {
     console.error(e);
+    setHealthDot('error');
     alert('Error loading data:\n' + e.message);
   } finally {
     loading = false;
@@ -1683,13 +1708,14 @@ function renderSpeed() {
 function renderRevenue() {
   const r = D.range(document.getElementById('rev-range').value);
 
-  // Source of truth: Commissions table (fed by Whop webhook)
+  // Source of truth: Commissions table — only real Whop payments (must have Whop Payment ID)
   const payments = DB.commissions
     .filter(c => {
       const amount = fv(c,'Deal Amount') || 0;
       const created = c.createdTime || '';
       const dateStr = created.split('T')[0];
-      return amount > 0 && D.in(dateStr, r);
+      const whopId = fv(c,'Whop Payment ID') || '';
+      return amount > 0 && whopId.length > 0 && D.in(dateStr, r);
     })
     .sort((a,b) => new Date(b.createdTime||0) - new Date(a.createdTime||0));
 
