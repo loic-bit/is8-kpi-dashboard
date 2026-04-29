@@ -1683,35 +1683,44 @@ function renderSpeed() {
 function renderRevenue() {
   const r = D.range(document.getElementById('rev-range').value);
 
-  const payments = DB.calls
-    .filter(c => fv(c,'Cash Collected') && fv(c,'Cash Collected') > 0 && D.in(fv(c,'Call Date'), r))
-    .sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
+  // Source of truth: Commissions table (fed by Whop webhook)
+  const payments = DB.commissions
+    .filter(c => {
+      const amount = fv(c,'Deal Amount') || 0;
+      const created = c.createdTime || '';
+      const dateStr = created.split('T')[0];
+      return amount > 0 && D.in(dateStr, r);
+    })
+    .sort((a,b) => new Date(b.createdTime||0) - new Date(a.createdTime||0));
 
-  const total   = payments.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
-  const closes  = payments.filter(c => fv(c,'Outcome') === 'Closed');
-  const avgDeal = closes.length > 0 ? closes.reduce((s,c)=>s+(fv(c,'Cash Collected')||0),0) / closes.length : null;
-
-  // Product breakdown
-  const prodMap = {};
+  const total    = payments.reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+  const avgDeal  = payments.length > 0 ? total / payments.length : null;
+  const byCloser = {};
   payments.forEach(c => {
-    const p = fv(c,'Product') || 'Unknown';
-    prodMap[p] = (prodMap[p]||0) + (fv(c,'Cash Collected')||0);
+    const cl = fv(c,'Closer') || 'Unassigned';
+    byCloser[cl] = (byCloser[cl]||0) + (fv(c,'Deal Amount')||0);
+  });
+  const byStatus = {};
+  payments.forEach(c => {
+    const st = fv(c,'Status') || 'Pending';
+    byStatus[st] = (byStatus[st]||0) + (fv(c,'Deal Amount')||0);
   });
 
   document.getElementById('rev-kpis').innerHTML = [
     kpiCard({ label: 'Total Cash Collected', value: F.$(total), accent: true,
       goalPct: Math.min(total / CFG.goals.monthlyRev, 1), goalLabel: `of ${F.$(CFG.goals.monthlyRev)} goal` }),
-    kpiCard({ label: 'New Closes', value: closes.length, sub: `${F.$(closes.reduce((s,c)=>s+(fv(c,'Cash Collected')||0),0))} collected` }),
-    kpiCard({ label: 'Avg Deal Size', value: avgDeal != null ? F.$(avgDeal) : '—', sub: 'New enrollments only' }),
-    kpiCard({ label: 'Unique Products', value: Object.keys(prodMap).length, sub: Object.entries(prodMap).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k.replace('Investing Section 8','IS8')}: ${F.$(v)}`).join(' · ') }),
+    kpiCard({ label: 'New Closes', value: payments.length, sub: `${F.$(total)} across ${payments.length} deals` }),
+    kpiCard({ label: 'Avg Deal Size', value: avgDeal != null ? F.$(Math.round(avgDeal)) : '—', sub: 'All Whop payments' }),
+    kpiCard({ label: 'By Closer', value: Object.keys(byCloser).length > 0 ? '' : '—',
+      sub: Object.entries(byCloser).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${F.$(v)}`).join(' · ') }),
   ].join('');
 
-  // Chart: by product
-  const prodEntries = Object.entries(prodMap).sort((a,b)=>b[1]-a[1]);
-  const productColors = { 'Investing Section 8': '#f59e0b', 'Investing Section 8 Launchpad': '#3b82f6', 'Monthly Alumni Group': '#10b981', 'Unknown': '#6b7280' };
-  mkChart('chart-rev-product', 'bar', prodEntries.map(x=>x[0].replace('Investing Section 8','IS8')), [{
-    data: prodEntries.map(x=>x[1]),
-    backgroundColor: prodEntries.map(x => productColors[x[0]] || '#6b7280'),
+  // Chart: by closer
+  const closerEntries = Object.entries(byCloser).sort((a,b)=>b[1]-a[1]);
+  const closerColors = ['#f59e0b','#3b82f6','#10b981','#a78bfa','#f87171'];
+  mkChart('chart-rev-product', 'bar', closerEntries.map(x=>x[0]), [{
+    data: closerEntries.map(x=>x[1]),
+    backgroundColor: closerEntries.map((_,i) => closerColors[i % closerColors.length]),
     borderRadius: 5,
     label: 'Revenue',
   }], { plugins: { legend: { display: false } } });
@@ -1731,8 +1740,8 @@ function renderRevenue() {
   const cumRevData = days.map((d, i) => {
     if (i >= daysElapsed) return null;
     const dayRev = payments
-      .filter(c => D.key(fv(c,'Call Date')) === D.key(d))
-      .reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
+      .filter(c => (c.createdTime||'').split('T')[0] === D.key(d))
+      .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
     cumRev += dayRev;
     return cumRev;
   });
@@ -1751,11 +1760,6 @@ function renderRevenue() {
     revInsights.push({ type: gap >= 0 ? 'good' : 'warn',
       text: `Projecting ${F.$(Math.round(pace))} by month-end at current ${F.$(Math.round(total/daysElapsed))}/day avg — ${gap >= 0 ? F.$(Math.round(gap)) + ' above goal' : F.$(Math.round(-gap)) + ' short of goal'}.` });
   }
-  const prodEntries2 = Object.entries(prodMap).sort((a,b)=>b[1]-a[1]);
-  if (prodEntries2.length > 1) {
-    const top = prodEntries2[0];
-    revInsights.push({ type: 'info', text: `${top[0].replace('Investing ','').replace('Section 8','IS8')} is driving ${F.pct(top[1]/total)} of revenue (${F.$(top[1])}). ${prodEntries2.length} products active this period.` });
-  }
   const revInsightEl = document.getElementById('rev-insights');
   if (revInsightEl && revInsights.length) revInsightEl.innerHTML = buildInsights(revInsights);
 
@@ -1764,19 +1768,15 @@ function renderRevenue() {
     return;
   }
 
-  const typeLabel = (c) => {
-    const wp = fv(c,'Whop Payment ID') || '';
-    if (wp.startsWith('mem_')) return 'Subscription';
-    return 'One-Time';
-  };
+  const STATUS_CLS = { 'Paid': 'badge-green', 'Approved': 'badge-blue', 'Pending': 'badge-amber' };
 
   document.getElementById('rev-tbody').innerHTML = payments.map(c => `
     <tr>
       <td style="color:#fff;font-weight:500;">${fv(c,'Lead Name') || '—'}</td>
-      <td>${D.fmt(fv(c,'Call Date'))}</td>
-      <td>${fv(c,'Product') ? `<span class="badge badge-amber">${fv(c,'Product').replace('Investing Section 8','IS8')}</span>` : '<span class="badge badge-gray">Unknown</span>'}</td>
-      <td>${badge(fv(c,'Outcome') || 'Recurring')}</td>
-      <td class="r" style="font-weight:700; color:#f59e0b;">${F.$(fv(c,'Cash Collected'))}</td>
+      <td>${D.fmt((c.createdTime||'').split('T')[0])}</td>
+      <td>${fv(c,'Closer') ? `<span class="badge badge-amber">${fv(c,'Closer')}</span>` : '<span class="badge badge-gray">—</span>'}</td>
+      <td><span class="badge ${STATUS_CLS[fv(c,'Status')]||'badge-gray'}">${fv(c,'Status')||'Pending'}</span></td>
+      <td class="r" style="font-weight:700; color:#f59e0b;">${F.$(fv(c,'Deal Amount')||0)}</td>
       <td style="color:#374151; font-size:11.5px; font-family:monospace;">${(fv(c,'Whop Payment ID')||'—').slice(0,18)}</td>
     </tr>`).join('');
 }
