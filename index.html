@@ -2295,18 +2295,15 @@ function refreshCommPayoutSummary() {
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
       if (status === 'Approved') totalApproved += earned;
-      if (status === 'Paid') totalPaid += earned;
     });
     const grandTotal = totalSetter + totalCloser;
     if (grandTotal === 0 && totalOnHold === 0) return null;
-    const paidColor = totalPaid > 0 ? '#10b981' : '#4b5563';
     return `<tr>
       <td style="font-weight:700;color:#fff;">${rep}</td>
       <td style="color:#6b7280;font-size:12px;">${REP_ROLES[rep]||''}</td>
       <td class="r" style="color:#60a5fa;">${F.$(totalSetter)}</td>
       <td class="r" style="color:#a78bfa;">${F.$(totalCloser)}</td>
       <td class="r" style="color:#3b82f6;font-weight:600;">${totalApproved > 0 ? F.$(totalApproved) : '—'}</td>
-      <td class="r" style="color:${paidColor};font-size:12px;">${totalPaid > 0 ? F.$(totalPaid) : '—'}</td>
       <td class="r" style="color:#6b7280;font-size:12px;" title="Held until full payment received">${totalOnHold>0?F.$(totalOnHold):'—'}</td>
     </tr>`;
   }).filter(Boolean).join('');
@@ -2318,9 +2315,8 @@ function refreshCommPayoutSummary() {
     <th class="r" style="color:#60a5fa;">As Setter</th>
     <th class="r" style="color:#a78bfa;">As Closer</th>
     <th class="r" style="color:#3b82f6;">Approved (Pay Now)</th>
-    <th class="r" style="color:#10b981;">Paid</th>
     <th class="r" style="color:#6b7280;">On Hold (Deposits)</th>
-  </tr></thead><tbody>${repPayoutRows || `<tr><td colspan="7" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>`}</tbody>`;
+  </tr></thead><tbody>${repPayoutRows || `<tr><td colspan="6" style="text-align:center;padding:24px;color:#4b5563;">No commissions for ${periodLabel}.</td></tr>`}</tbody>`;
 }
 
 function renderCommissions() {
