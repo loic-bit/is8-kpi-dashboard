@@ -2122,7 +2122,7 @@ function renderLeaderboard() {
   const range = document.getElementById('lb-range')?.value || 'month';
   const r = D.range(range || 'month');
 
-  const calls = DB.calls.filter(c => D.in(fv(c,'Call Date'), r));
+  // All leaderboard stats derived purely from Commissions (source of truth)
   const comms = DB.commissions.filter(c => {
     const isDeposit = (fv(c,'Payment Type') || 'Full Payment') === 'Deposit';
     return !isDeposit && D.in(fv(c,'Close Date'), r);
@@ -2131,32 +2131,22 @@ function renderLeaderboard() {
   const CLOSERS = ['Will','Alen','Max'];
   const SETTERS = ['Max','Ben'];
 
-  // Build per-closer stats — deal volume from commissions, show/show-rate from calls
   const closerStats = CLOSERS.map(name => {
-    const myCalls = calls.filter(c => fv(c,'Closer') === name);
     const myComms = comms.filter(c => fv(c,'Closer') === name);
-    const shows    = myCalls.filter(c => isShow(c)).length;
-    const booked   = myCalls.length;
-    const closes   = myComms.length;
-    const cash     = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
-    const comm     = myComms.reduce((s,c) => s + calcComm(parseFloat(fv(c,'Deal Amount')||0), fv(c,'Setter'), name, fv(c,'AI Setter')===true).cAmt, 0);
-    const closeRate = shows > 0 ? closes/shows : 0;
-    const showRate  = booked > 0 ? shows/booked : 0;
-    return { name, booked, shows, closes, cash, comm, closeRate, showRate };
+    const closes  = myComms.length;
+    const cash    = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
+    const comm    = myComms.reduce((s,c) => s + calcComm(parseFloat(fv(c,'Deal Amount')||0), fv(c,'Setter'), name, fv(c,'AI Setter')===true).cAmt, 0);
+    const avgDeal = closes > 0 ? cash / closes : 0;
+    return { name, closes, cash, comm, avgDeal };
   }).sort((a,b) => b.cash - a.cash || b.closes - a.closes);
 
-  // Build per-setter stats — deal volume from commissions, booked/show-rate from calls
   const setterStats = SETTERS.map(name => {
-    const myCalls = calls.filter(c => fv(c,'Setter') === name);
     const myComms = comms.filter(c => fv(c,'Setter') === name);
-    const shows   = myCalls.filter(c => isShow(c)).length;
-    const booked  = myCalls.length;
     const closes  = myComms.length;
     const cashGen = myComms.reduce((s,c) => s + (parseFloat(fv(c,'Deal Amount')) || 0), 0);
     const comm    = myComms.reduce((s,c) => s + calcComm(parseFloat(fv(c,'Deal Amount')||0), name, fv(c,'Closer'), fv(c,'AI Setter')===true).sAmt, 0);
-    const showRate = booked > 0 ? shows/booked : 0;
-    return { name, booked, shows, closes, cashGen, comm, showRate };
-  }).sort((a,b) => b.cashGen - a.cashGen);
+    return { name, closes, cashGen, comm };
+  }).sort((a,b) => b.cashGen - a.cashGen || b.closes - a.closes);
 
   const MEDALS = ['🥇','🥈','🥉'];
   const RANK_COLORS = ['#f59e0b','#9ca3af','#cd7f32'];
@@ -2165,20 +2155,18 @@ function renderLeaderboard() {
   const mvp = closerStats[0];
   const mvpEl = document.getElementById('lb-mvp');
   if (mvp && mvp.closes > 0) {
-    const streak = mvp.closeRate >= CFG.goals.closeRate ? '🔥 Closing above goal' : '🎯 Grinding';
     mvpEl.innerHTML = `
       <div style="background:linear-gradient(135deg,#1a1500,#111); border:1px solid rgba(245,158,11,0.3); border-radius:14px; padding:20px 24px; display:flex; align-items:center; gap:20px;">
         <div style="font-size:48px; line-height:1;">👑</div>
         <div style="flex:1;">
           <div style="font-size:10px; font-weight:700; color:#92400e; text-transform:uppercase; letter-spacing:0.12em; margin-bottom:4px;">Top Closer This Period</div>
           <div style="font-size:26px; font-weight:800; color:#f59e0b; letter-spacing:-0.5px;">${mvp.name}</div>
-          <div style="font-size:13px; color:#78716c; margin-top:3px;">${streak}</div>
+          <div style="font-size:13px; color:#78716c; margin-top:3px;">${mvp.closes} deal${mvp.closes!==1?'s':''} closed &nbsp;·&nbsp; avg ${F.$(mvp.avgDeal)} per deal</div>
         </div>
         <div style="display:flex; gap:28px; text-align:center;">
           <div><div style="font-size:22px; font-weight:800; color:#fff;">${F.$(mvp.cash)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Deal Volume</div></div>
           <div><div style="font-size:22px; font-weight:800; color:#10b981;">${F.$(mvp.comm)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Earned</div></div>
-          <div><div style="font-size:22px; font-weight:800; color:${mvp.closeRate>=CFG.goals.closeRate?'#10b981':'#ef4444'}">${F.pct(mvp.closeRate)}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Close Rate</div></div>
-          <div><div style="font-size:22px; font-weight:800; color:#fff;">${mvp.closes}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Deals</div></div>
+          <div><div style="font-size:22px; font-weight:800; color:#fff;">${mvp.closes}</div><div style="font-size:10px; color:#6b7280; text-transform:uppercase; margin-top:2px;">Deals Closed</div></div>
         </div>
       </div>`;
   } else {
@@ -2186,24 +2174,18 @@ function renderLeaderboard() {
   }
 
   const maxCash = Math.max(...closerStats.map(s=>s.cash), 1);
-  const maxBooked = Math.max(...closerStats.map(s=>s.booked), 1);
 
   // Closer leaderboard
   const closerRows = closerStats.map((s, i) => {
     const medal = MEDALS[i] || `#${i+1}`;
     const barW = Math.round((s.cash / maxCash) * 100);
-    const crColor = s.closeRate >= CFG.goals.closeRate ? '#10b981' : s.closeRate > 0 ? '#f59e0b' : '#4b5563';
-    const srColor = s.showRate >= CFG.goals.showRate ? '#10b981' : s.showRate > 0 ? '#f59e0b' : '#4b5563';
     return `<tr>
       <td style="width:32px; font-size:20px; padding:14px 8px 14px 16px;">${medal}</td>
       <td style="font-weight:700; font-size:15px; color:${RANK_COLORS[i]||'#d1d5db'};">${s.name}</td>
       <td class="r" style="color:#fff; font-weight:700;">${F.$(s.cash)}</td>
       <td class="r" style="color:#10b981; font-weight:700;">${F.$(s.comm)}</td>
       <td class="r" style="color:#d1d5db;">${s.closes}</td>
-      <td class="r" style="color:#d1d5db;">${s.shows}</td>
-      <td class="r" style="color:#d1d5db;">${s.booked}</td>
-      <td class="r" style="color:${crColor}; font-weight:600;">${s.closes+s.shows>0?F.pct(s.closeRate):'—'}</td>
-      <td class="r" style="color:${srColor}; font-weight:600;">${s.booked>0?F.pct(s.showRate):'—'}</td>
+      <td class="r" style="color:#6b7280; font-size:12px;">${s.closes > 0 ? F.$(s.avgDeal) : '—'}</td>
       <td style="min-width:120px; padding-right:20px;">
         <div style="height:5px; background:#1e1e1e; border-radius:99px; overflow:hidden;">
           <div style="height:100%; width:${barW}%; background:linear-gradient(90deg,#f59e0b,#d97706); border-radius:99px; transition:width 0.4s;"></div>
@@ -2219,32 +2201,21 @@ function renderLeaderboard() {
         <thead><tr>
           <th style="width:32px;"></th>
           <th>Rep</th>
-          <th class="r">Deal Volume</th><th class="r" style="color:#10b981;">Earned</th><th class="r">Deals</th><th class="r">Shows</th><th class="r">Booked</th>
-          <th class="r">Close Rate</th><th class="r">Show Rate</th><th>Volume Bar</th>
+          <th class="r">Deal Volume</th><th class="r" style="color:#10b981;">Earned</th><th class="r">Deals</th><th class="r">Avg Deal</th><th>Volume Bar</th>
         </tr></thead>
-        <tbody>${closerRows || '<tr><td colspan="10" style="text-align:center;padding:32px;color:#4b5563;">No closer data this period</td></tr>'}</tbody>
+        <tbody>${closerRows || '<tr><td colspan="7" style="text-align:center;padding:32px;color:#4b5563;">No closer data this period</td></tr>'}</tbody>
       </table>
-    </div>
-    <div style="display:flex; gap:16px; margin-top:8px; font-size:11px; color:#4b5563;">
-      <span style="color:#10b981;">■</span><span>At or above goal</span>
-      <span style="color:#f59e0b;">■</span><span>Below goal</span>
-      <span style="color:#4b5563;">■</span><span>No data</span>
-      <span style="margin-left:8px;">Close goal: ${F.pct(CFG.goals.closeRate)} · Show goal: ${F.pct(CFG.goals.showRate)}</span>
     </div>`;
 
   // Setter leaderboard
-  const maxSet = Math.max(...setterStats.map(s=>s.booked), 1);
+  const maxSet = Math.max(...setterStats.map(s=>s.cashGen), 1);
   const setterRows = setterStats.map((s, i) => {
     const medal = MEDALS[i] || `#${i+1}`;
-    const barW = Math.round((s.booked / maxSet) * 100);
-    const srColor = s.showRate >= CFG.goals.showRate ? '#10b981' : s.showRate > 0 ? '#f59e0b' : '#4b5563';
+    const barW = Math.round((s.cashGen / maxSet) * 100);
     return `<tr>
       <td style="width:32px; font-size:20px; padding:14px 8px 14px 16px;">${medal}</td>
       <td style="font-weight:700; font-size:15px; color:${RANK_COLORS[i]||'#d1d5db'};">${s.name}</td>
-      <td class="r" style="color:#fff; font-weight:700;">${s.booked}</td>
-      <td class="r" style="color:#d1d5db;">${s.shows}</td>
       <td class="r" style="color:#d1d5db;">${s.closes}</td>
-      <td class="r" style="color:${srColor}; font-weight:600;">${s.booked>0?F.pct(s.showRate):'—'}</td>
       <td class="r" style="color:#fff; font-weight:600;">${F.$(s.cashGen)}</td>
       <td class="r" style="color:#10b981; font-weight:700;">${F.$(s.comm)}</td>
       <td style="min-width:120px; padding-right:20px;">
@@ -2262,10 +2233,9 @@ function renderLeaderboard() {
         <thead><tr>
           <th style="width:32px;"></th>
           <th>Rep</th>
-          <th class="r">Calls Set</th><th class="r">Shows</th><th class="r">Closes</th>
-          <th class="r">Show Rate</th><th class="r">Deal Volume</th><th class="r" style="color:#10b981;">Earned</th><th>Booking Bar</th>
+          <th class="r">Deals Set</th><th class="r">Deal Volume</th><th class="r" style="color:#10b981;">Earned</th><th>Volume Bar</th>
         </tr></thead>
-        <tbody>${setterRows || '<tr><td colspan="9" style="text-align:center;padding:32px;color:#4b5563;">No setter data this period</td></tr>'}</tbody>
+        <tbody>${setterRows || '<tr><td colspan="6" style="text-align:center;padding:32px;color:#4b5563;">No setter data this period</td></tr>'}</tbody>
       </table>
     </div>`;
 }
@@ -2433,8 +2403,15 @@ function renderCommissions() {
       ? `<span style="font-size:10px;color:#f59e0b;font-weight:600;">ON HOLD</span>`
       : (comm.total > 0 ? F.$(comm.total) : '—');
 
-    return `<tr data-rid="${rid}" ${isDeposit ? 'style="opacity:0.75;"' : ''}>
-      <td style="color:#d1d5db; font-weight:500; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${f['Lead Name']||'—'}</td>
+    const STATUS_GLOW = {
+      'Paid':     { accent: '#10b981', bg: 'rgba(16,185,129,0.06)' },
+      'Approved': { accent: '#3b82f6', bg: 'rgba(59,130,246,0.06)' },
+      'Pending':  { accent: '#f59e0b', bg: 'rgba(245,158,11,0.04)' }
+    };
+    const glow = STATUS_GLOW[status] || { accent: '#374151', bg: 'transparent' };
+
+    return `<tr data-rid="${rid}" style="background:${glow.bg}; ${isDeposit ? 'opacity:0.75;' : ''}">
+      <td style="border-left:3px solid ${glow.accent}; color:#d1d5db; font-weight:500; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${f['Lead Name']||'—'}</td>
       <td style="color:#6b7280; white-space:nowrap;">${f['Close Date']||'—'}</td>
       <td class="r" style="color:#fff; font-weight:700; white-space:nowrap;">${F.$(deal)}</td>
       <td style="white-space:nowrap;">
@@ -2460,7 +2437,7 @@ function renderCommissions() {
       <td class="r comm-t-cell" style="font-weight:700; color:${commColor}; font-size:14px; white-space:nowrap;">${commLabel}</td>
       <td style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Pay Period']||'—'}</td>
       <td>
-        <select class="comm-sel" data-field="Status" style="max-width:90px;" ${isDeposit?'disabled title="Deposit — held until fully paid"':''}>
+        <select class="comm-sel" data-field="Status" style="max-width:90px; border-color:${glow.accent}; color:${glow.accent}; font-weight:600;" ${isDeposit?'disabled title="Deposit — held until fully paid"':''}>
           ${selOpts(STATUS_OPTS, status)}
         </select>
       </td>
@@ -2531,6 +2508,17 @@ function renderCommissions() {
       if (field === 'Setter') el.className = 'comm-sel' + (!value ? ' unclaimed' : '');
       if (field === 'Closer') el.className = 'comm-sel' + (!value ? ' unclaimed' : '');
       if (field === 'Payment Type') el.className = 'comm-sel' + (isDeposit ? ' unclaimed' : '');
+
+      // Re-apply glow when status changes
+      if (field === 'Status') {
+        const GLOW_MAP = { 'Paid': { accent: '#10b981', bg: 'rgba(16,185,129,0.06)' }, 'Approved': { accent: '#3b82f6', bg: 'rgba(59,130,246,0.06)' }, 'Pending': { accent: '#f59e0b', bg: 'rgba(245,158,11,0.04)' } };
+        const g = GLOW_MAP[value] || { accent: '#374151', bg: 'transparent' };
+        tr.style.background = g.bg;
+        const firstTd = tr.querySelector('td');
+        if (firstTd) firstTd.style.borderLeft = '3px solid ' + g.accent;
+        el.style.borderColor = g.accent;
+        el.style.color = g.accent;
+      }
 
       // Patch Airtable — include updated commission amounts
       const patchFields = { [field]: value };
