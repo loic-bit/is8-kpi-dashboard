@@ -654,7 +654,7 @@
           </select>
           <select id="comm-status" class="filter-select">
             <option value="">All Statuses</option>
-            <option>Pending</option><option>Approved</option><option>Paid</option>
+            <option>Pending</option><option>Approved</option><option>Paid</option><option>Refunded</option>
           </select>
         </div>
       </div>
@@ -2291,6 +2291,7 @@ function refreshCommPayoutSummary() {
       if (setter === rep) earned += sAmt;
       if (closer === rep) earned += cAmt;
       if (!earned) return;
+      if (isDeposit && status === 'Refunded') return;
       if (isDeposit) { totalOnHold += earned; return; }
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
@@ -2394,8 +2395,9 @@ function renderCommissions() {
 
   const SETTER_OPTS    = ['', 'Max', 'Ben'];
   const CLOSER_OPTS    = ['', 'Max', 'Will', 'Alen'];
-  const STATUS_OPTS    = ['Pending', 'Approved', 'Paid'];
-  const PAY_TYPE_OPTS  = ['Full Payment', 'Deposit'];
+  const STATUS_OPTS         = ['Pending', 'Approved', 'Paid'];
+  const DEPOSIT_STATUS_OPTS = ['Pending', 'Approved', 'Paid', 'Refunded'];
+  const PAY_TYPE_OPTS       = ['Full Payment', 'Deposit'];
 
   const tbody = filtered.map(({ rec, f, deal, setter, closer, aiSet, comm }) => {
     const rid = rec.id;
@@ -2405,15 +2407,19 @@ function renderCommissions() {
     const payType  = f['Payment Type'] || 'Full Payment';
     const isDeposit = payType === 'Deposit';
 
+    const isRefunded = isDeposit && status === 'Refunded';
     const commColor = isDeposit ? '#6b7280' : '#10b981';
-    const commLabel = isDeposit
-      ? `<span style="font-size:10px;color:#f59e0b;font-weight:600;">ON HOLD</span>`
-      : (comm.total > 0 ? F.$(comm.total) : '—');
+    const commLabel = isRefunded
+      ? `<span style="font-size:10px;color:#ef4444;font-weight:600;">REFUNDED</span>`
+      : isDeposit
+        ? `<span style="font-size:10px;color:#f59e0b;font-weight:600;">ON HOLD</span>`
+        : (comm.total > 0 ? F.$(comm.total) : '—');
 
     const STATUS_GLOW = {
       'Paid':     { accent: '#10b981', bg: 'rgba(16,185,129,0.06)' },
       'Approved': { accent: '#3b82f6', bg: 'rgba(59,130,246,0.06)' },
-      'Pending':  { accent: '#f59e0b', bg: 'rgba(245,158,11,0.04)' }
+      'Pending':  { accent: '#f59e0b', bg: 'rgba(245,158,11,0.04)' },
+      'Refunded': { accent: '#ef4444', bg: 'rgba(239,68,68,0.06)' }
     };
     const glow = STATUS_GLOW[status] || { accent: '#374151', bg: 'transparent' };
 
@@ -2444,8 +2450,8 @@ function renderCommissions() {
       <td class="r comm-t-cell" style="font-weight:700; color:${commColor}; font-size:14px; white-space:nowrap;">${commLabel}</td>
       <td style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Pay Period']||'—'}</td>
       <td>
-        <select class="comm-sel" data-field="Status" style="max-width:90px; border-color:${glow.accent}; color:${glow.accent}; font-weight:600;" ${isDeposit?'disabled title="Deposit — held until fully paid"':''}>
-          ${selOpts(STATUS_OPTS, status)}
+        <select class="comm-sel" data-field="Status" style="max-width:90px; border-color:${glow.accent}; color:${glow.accent}; font-weight:600;">
+          ${selOpts(isDeposit ? DEPOSIT_STATUS_OPTS : STATUS_OPTS, status)}
         </select>
       </td>
     </tr>`;
