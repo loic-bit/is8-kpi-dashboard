@@ -253,7 +253,7 @@
       <!-- Supporting charts -->
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
         <div class="kpi-card">
-          <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Opt-ins by Source</p>
+          <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Opt-ins by Source — Last 30 Days</p>
           <canvas id="chart-source" height="200"></canvas>
         </div>
         <div class="kpi-card">
@@ -402,8 +402,8 @@
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <select id="optins-range" class="filter-select">
             <option value="week">This Week</option>
-            <option value="month" selected>This Month</option>
-            <option value="last30">Last 30 Days</option>
+            <option value="month">This Month</option>
+            <option value="last30" selected>Last 30 Days</option>
             <option value="last90">Last 90 Days</option>
             <option value="all">All Time</option>
           </select>
@@ -1278,9 +1278,10 @@ function renderScorecard() {
   const insightEl = document.getElementById('sc-insights');
   if (insightEl) insightEl.innerHTML = insights.length ? buildInsights(insights) : '';
 
-  // ── Opt-ins by source chart ──
+  // ── Opt-ins by source chart (always last 30 days for a meaningful baseline) ──
+  const optinRecs30 = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), D.range('last30')));
   const srcOptMap = {};
-  optinRecs.forEach(r => { const s = fv(r,'Opt-in Source')||'Unknown'; srcOptMap[s]=(srcOptMap[s]||0)+1; });
+  optinRecs30.forEach(r => { const s = fv(r,'Opt-in Source')||'Unknown'; srcOptMap[s]=(srcOptMap[s]||0)+1; });
   const srcE = Object.entries(srcOptMap).sort((a,b)=>b[1]-a[1]);
   const srcC = ['#f59e0b','#60a5fa','#10b981','#a78bfa','#f87171','#34d399'];
   mkChart('chart-source','bar', srcE.map(x=>x[0]), [{
