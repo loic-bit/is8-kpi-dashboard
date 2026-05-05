@@ -506,6 +506,7 @@
         <select id="dials-member" class="filter-select">
           <option value="">All Team Members</option>
           <option value="Max">Max</option>
+          <option value="Ben">Ben</option>
           <option value="Will">Will</option>
           <option value="Alen">Alen</option>
         </select>
@@ -522,7 +523,7 @@
         <div class="skeleton" style="height:100px;"></div>
       </div>
       <div class="kpi-card" style="margin-bottom:16px;">
-        <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Daily Dials — Outbound vs Inbound (Last 14 Days)</p>
+        <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Daily Dials by Team Member — Last 14 Days</p>
         <canvas id="chart-dials"></canvas>
       </div>
       <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; overflow:hidden;">
@@ -1641,15 +1642,30 @@ function renderDials() {
     kpiCard({ label: 'Total Talk Time', value: Math.round(totalSec/60) + ' min', sub: 'All calls' }),
   ].join('');
 
-  // Chart: last 14 days
+  // Chart: last 14 days — stacked by team member
   const days14 = D.last(14);
   const labels14 = days14.map(D.shortLabel);
-  const outD = days14.map(d => DB.callLog.filter(c => D.key(fv(c,'Date'))===D.key(d) && fv(c,'Direction')==='Outbound').length);
-  const inD  = days14.map(d => DB.callLog.filter(c => D.key(fv(c,'Date'))===D.key(d) && fv(c,'Direction')==='Inbound').length);
-  mkChart('chart-dials', 'bar', labels14, [
-    { label: 'Outbound', data: outD, backgroundColor: '#f59e0b', borderRadius: 4 },
-    { label: 'Inbound',  data: inD,  backgroundColor: '#3b82f6', borderRadius: 4 },
-  ]);
+  const DIAL_MEMBERS = [
+    { name: 'Max',  color: '#f59e0b' },
+    { name: 'Ben',  color: '#3b82f6' },
+    { name: 'Will', color: '#10b981' },
+    { name: 'Alen', color: '#8b5cf6' },
+  ];
+  const memberDatasets = DIAL_MEMBERS.map(m => ({
+    label: m.name,
+    data: days14.map(d => DB.callLog.filter(c =>
+      D.key(fv(c,'Date')) === D.key(d) && fv(c,'Team Member') === m.name
+    ).length),
+    backgroundColor: m.color,
+    borderRadius: 2,
+    stack: 'dials',
+  }));
+  mkChart('chart-dials', 'bar', labels14, memberDatasets, {
+    scales: {
+      x: { grid: { display: false }, ticks: { maxRotation: 0 }, stacked: true },
+      y: { grid: { color: '#1a1a1a' }, beginAtZero: true, stacked: true },
+    },
+  });
 
   if (!dials.length) {
     document.getElementById('dials-tbody').innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:#374151;">No calls found.</td></tr>`;
