@@ -169,10 +169,6 @@
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
         Dial Tracker
       </div>
-      <div class="nav-item" data-view="speed">
-        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        Speed to Lead
-      </div>
       <div class="nav-item" data-view="revenue">
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
         Revenue
@@ -538,41 +534,6 @@
       </div>
     </div>
 
-    <!-- ═══ SPEED TO LEAD ═══ -->
-    <div id="view-speed" class="view" style="padding:28px 32px;">
-      <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:24px;">
-        <div>
-          <h1 style="font-size:20px; font-weight:700; color:#fff;">Speed to Lead</h1>
-          <p style="font-size:13px; color:#6b7280; margin-top:3px;">Time from opt-in to first outbound dial &nbsp;·&nbsp; <span style="color:#10b981;">Goal: under 5 min</span></p>
-        </div>
-        <select id="speed-range" class="filter-select">
-          <option value="month" selected>This Month</option>
-          <option value="last30">Last 30 Days</option>
-          <option value="last90">Last 90 Days</option>
-        </select>
-      </div>
-      <div id="speed-summary" style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:20px;">
-        <div class="skeleton" style="height:100px;"></div>
-        <div class="skeleton" style="height:100px;"></div>
-        <div class="skeleton" style="height:100px;"></div>
-        <div class="skeleton" style="height:100px;"></div>
-      </div>
-      <div class="kpi-card" style="margin-bottom:16px;">
-        <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Avg Speed to Lead by Day &nbsp;·&nbsp; Goal line: 0.08 hrs (5 min)</p>
-        <canvas id="chart-speed"></canvas>
-      </div>
-      <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; overflow:hidden;">
-        <div style="overflow-x:auto;">
-          <table class="data-table">
-            <thead><tr>
-              <th>Lead</th><th>Call Date</th><th>Setter</th><th class="r">Speed to Lead</th><th>vs Goal</th>
-            </tr></thead>
-            <tbody id="speed-tbody"><tr><td colspan="5" style="text-align:center; padding:40px; color:#4b5563;">Loading...</td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
     <!-- ═══ REVENUE ═══ -->
     <div id="view-revenue" class="view" style="padding:28px 32px;">
       <div style="display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:24px;">
@@ -667,9 +628,9 @@
             <th>Lead</th><th>Close Date</th><th class="r">Deal</th>
             <th>Type</th><th>Setter</th><th>Closer</th><th style="text-align:center;">AI</th>
             <th class="r">Setter Comm</th><th class="r">Closer Comm</th><th class="r">Total</th>
-            <th>Pay Period</th><th>Status</th>
+            <th>Pay Period</th><th>Paid Date</th><th>Status</th>
           </tr></thead>
-          <tbody id="comm-tbody"><tr><td colspan="12" style="text-align:center;padding:40px;color:#374151;">Loading...</td></tr></tbody>
+          <tbody id="comm-tbody"><tr><td colspan="13" style="text-align:center;padding:40px;color:#374151;">Loading...</td></tr></tbody>
         </table>
       </div>
       <div id="comm-totals" style="margin-top:12px; padding:14px 16px; background:#111; border:1px solid #1e1e1e; border-radius:10px; display:flex; gap:24px; flex-wrap:wrap;"></div>
@@ -707,7 +668,6 @@ const CFG = {
   },
   cacheTTL: 5 * 60 * 1000,
   goals: {
-    speedToLead: 0.083,   // 5 minutes in hours
     showRate:    0.75,
     closeRate:   0.30,
     monthlyRev:  100000,
@@ -1683,70 +1643,6 @@ function renderDials() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// VIEW: SPEED TO LEAD
-// ═══════════════════════════════════════════════════════════
-function renderSpeed() {
-  const r = D.range(document.getElementById('speed-range').value);
-
-  const calls = DB.calls
-    .filter(c => D.in(fv(c,'Call Date'), r) && fv(c,'Speed to Lead (hrs)') != null)
-    .sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
-
-  const speeds = calls.map(c => fv(c,'Speed to Lead (hrs)'));
-  const avg = speeds.length ? speeds.reduce((a,b)=>a+b,0)/speeds.length : null;
-  const underGoal = speeds.filter(s => s <= CFG.goals.speedToLead).length;
-  const goalPct = speeds.length ? underGoal / speeds.length : 0;
-
-  const setterMap = {};
-  calls.forEach(c => {
-    const s = fv(c,'Setter') || 'Unknown';
-    if (!setterMap[s]) setterMap[s] = [];
-    setterMap[s].push(fv(c,'Speed to Lead (hrs)'));
-  });
-  const best = Object.entries(setterMap)
-    .map(([s,arr]) => ({ s, avg: arr.reduce((a,b)=>a+b,0)/arr.length }))
-    .sort((a,b) => a.avg-b.avg)[0];
-
-  document.getElementById('speed-summary').innerHTML = [
-    kpiCard({ label: 'Avg Speed to Lead', value: avg != null ? F.hrs(avg) : '—', accent: avg != null && avg <= CFG.goals.speedToLead }),
-    kpiCard({ label: 'Under 5 Min', value: `${underGoal} / ${speeds.length}`, goalPct, goalLabel: 'On goal' }),
-    kpiCard({ label: 'Fastest Setter', value: best?.s || '—', sub: best ? `Avg ${F.hrs(best.avg)}` : '' }),
-    kpiCard({ label: 'Tracked Calls', value: F.num(speeds.length) }),
-  ].join('');
-
-  // Chart
-  const days = D.last(30);
-  const labels = days.map(D.shortLabel);
-  const avgByDay = days.map(day => {
-    const arr = DB.calls
-      .filter(c => D.key(fv(c,'Call Date'))===D.key(day) && fv(c,'Speed to Lead (hrs)')!=null)
-      .map(c => fv(c,'Speed to Lead (hrs)'));
-    return arr.length ? +(arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(2) : null;
-  });
-  mkChart('chart-speed', 'line', labels, [
-    { label: 'Avg Speed (hrs)', data: avgByDay, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)', fill: true, spanGaps: true },
-    { label: 'Goal (0.08 hrs)', data: days.map(()=>CFG.goals.speedToLead), borderColor: '#10b981', borderDash: [5,5], pointRadius: 0, borderWidth: 1.5, spanGaps: true },
-  ]);
-
-  if (!calls.length) {
-    document.getElementById('speed-tbody').innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:#374151;">No speed to lead data found.</td></tr>`;
-    return;
-  }
-  document.getElementById('speed-tbody').innerHTML = calls.map(c => {
-    const spd = fv(c,'Speed to Lead (hrs)');
-    const ok  = spd <= CFG.goals.speedToLead;
-    return `
-    <tr>
-      <td style="color:#fff;font-weight:500;">${fv(c,'Lead Name') || '—'}</td>
-      <td>${D.fmt(fv(c,'Call Date'))}</td>
-      <td>${fv(c,'Setter') || '—'}</td>
-      <td class="r" style="font-weight:600; color:${ok ? '#10b981' : '#ef4444'};">${F.hrs(spd)}</td>
-      <td>${ok ? '<span class="badge badge-green">✓ On Goal</span>' : '<span class="badge badge-red">Over Goal</span>'}</td>
-    </tr>`;
-  }).join('');
-}
-
-// ═══════════════════════════════════════════════════════════
 // VIEW: REVENUE
 // ═══════════════════════════════════════════════════════════
 function renderRevenue() {
@@ -1888,11 +1784,16 @@ function renderOptins() {
   if (sourceFilter) recs = recs.filter(rec => fv(rec,'Opt-in Source') === sourceFilter);
   if (statusFilter) recs = recs.filter(rec => fv(rec,'Status') === statusFilter);
 
-  const isBooked = rec => fv(rec,'Call Booked') === true || fv(rec,'Status') === 'Booked' || fv(rec,'Status') === 'Closed';
+  const bookedContactIds = new Set(DB.calls.map(c => fv(c,'GHL Contact ID')).filter(Boolean));
+  const bookedEmails = new Set(DB.calls.map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean));
+  const isBooked = rec => fv(rec,'Call Booked') === true || fv(rec,'Status') === 'Booked' || fv(rec,'Status') === 'Closed'
+    || bookedContactIds.has(fv(rec,'GHL Contact ID'))
+    || bookedEmails.has((fv(rec,'Email')||'').toLowerCase());
   const total   = allInRange.length;
-  const bookedN = allInRange.filter(isBooked).length;
   const closedN = allInRange.filter(rec => fv(rec,'Status') === 'Closed').length;
-  const bookRate  = total > 0 ? bookedN / total : 0;
+  // Booking rate uses full 365-day opt-ins dataset so short period filters don't produce 0%
+  const bookedN  = DB.optins.filter(isBooked).length;
+  const bookRate = DB.optins.length > 0 ? bookedN / DB.optins.length : 0;
   const closeRate = bookedN > 0 ? closedN / bookedN : 0;
 
   // Source counts
@@ -2466,13 +2367,14 @@ function renderCommissions() {
       <td class="r comm-c-cell" style="color:${isDeposit?'#6b7280':'#a78bfa'}; font-size:12px; white-space:nowrap;">${isDeposit?'—':(comm.cPct>0?comm.cPct+'% / '+F.$(comm.cAmt):'—')}</td>
       <td class="r comm-t-cell" style="font-weight:700; color:${commColor}; font-size:14px; white-space:nowrap;">${commLabel}</td>
       <td style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Pay Period']||'—'}</td>
+      <td class="comm-paid-date" style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Paid Date']||'—'}</td>
       <td>
         <select class="comm-sel" data-field="Status" style="max-width:90px; border-color:${glow.accent}; color:${glow.accent}; font-weight:600;">
           ${selOpts(isDeposit ? DEPOSIT_STATUS_OPTS : STATUS_OPTS, status)}
         </select>
       </td>
     </tr>`;
-  }).join('') || `<tr><td colspan="12" style="text-align:center;padding:40px;color:#374151;">No deals match filters.</td></tr>`;
+  }).join('') || `<tr><td colspan="13" style="text-align:center;padding:40px;color:#374151;">No deals match filters.</td></tr>`;
 
   const tbodyEl = document.getElementById('comm-tbody');
   tbodyEl.innerHTML = tbody;
@@ -2548,6 +2450,15 @@ function renderCommissions() {
         if (firstTd) firstTd.style.borderLeft = '3px solid ' + g.accent;
         el.style.borderColor = g.accent;
         el.style.color = g.accent;
+
+        // Auto-stamp Paid Date when status moves to Paid
+        if (value === 'Paid' && !rec.fields['Paid Date']) {
+          const today = new Date().toISOString().split('T')[0];
+          rec.fields['Paid Date'] = today;
+          const paidDateCell = tr.querySelector('.comm-paid-date');
+          if (paidDateCell) paidDateCell.textContent = today;
+          patchFields['Paid Date'] = today;
+        }
       }
 
       // Patch Airtable — include updated commission amounts
@@ -2598,7 +2509,6 @@ function renderCurrent() {
     meta:        renderMeta,
     optins:      renderOptins,
     dials:       renderDials,
-    speed:       renderSpeed,
     revenue:     renderRevenue,
     leaderboard: renderLeaderboard,
     commissions: renderCommissions,
@@ -2743,7 +2653,6 @@ document.addEventListener('DOMContentLoaded', () => {
     ['calls-range', renderCalls], ['calls-closer', renderCalls], ['calls-outcome', renderCalls], ['calls-type', renderCalls],
     ['meta-range', renderMeta], ['meta-type', renderMeta],
     ['dials-range', renderDials], ['dials-member', renderDials], ['dials-direction', renderDials],
-    ['speed-range', renderSpeed],
     ['rev-range', renderRevenue],
     ['optins-range', renderOptins], ['optins-source', renderOptins], ['optins-status', renderOptins],
     ['lb-range', renderLeaderboard],
@@ -2756,7 +2665,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Keyboard shortcuts (1-6)
   document.addEventListener('keydown', e => {
     if (!Auth.check() || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    const views = ['scorecard','calls','meta','optins','dials','speed','revenue','leaderboard','commissions','health'];
+    const views = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','commissions','health'];
     const i = parseInt(e.key) - 1;
     if (i >= 0 && i < views.length) navigate(views[i]);
   });
