@@ -219,6 +219,9 @@
         </select>
       </div>
 
+      <!-- Data error banner -->
+      <div id="data-error-banner" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; padding:10px 14px; margin-bottom:12px; color:#f87171; font-size:13px;"></div>
+
       <!-- Decision alert -->
       <div id="sc-alert" style="margin-bottom:16px;"></div>
 
@@ -719,7 +722,17 @@ async function fetchTable(tableId, formula = '') {
     if (formula) p.set('filterByFormula', formula);
     if (offset) p.set('offset', offset);
     const url = `https://api.airtable.com/v0/${CFG.baseId}/${tableId}?${p}`;
-    const res = await fetch(url, { headers });
+
+    let res, lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1000));
+        res = await fetch(url, { headers });
+        if (res.status === 429) { await new Promise(r => setTimeout(r, 2000)); continue; }
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (!res) throw lastErr || new Error('Network error after retries');
     if (!res.ok) {
       const txt = await res.text();
       throw new Error(`Airtable ${res.status}: ${txt}`);
@@ -764,7 +777,7 @@ async function loadData(force = false) {
       fetchTable(CFG.tables.leads,   f90lead),
       fetchTable(CFG.tables.calls,   f90call),
       fetchTable(CFG.tables.callLog, f90date),
-      fetchTable(CFG.tables.dms),
+      fetchTable(CFG.tables.dms, "IS_AFTER({Last Message}, DATEADD(TODAY(), -90, 'days'))"),
       fetchTable(CFG.tables.meta,    f90date),
       fetchTable(CFG.tables.optins,  "IS_AFTER({Date Opted In}, DATEADD(TODAY(), -365, 'days'))"),
       fetchTable(CFG.tables.commissions),
@@ -789,7 +802,16 @@ async function loadData(force = false) {
   } catch(e) {
     console.error(e);
     setHealthDot('error');
-    alert('Error loading data:\n' + e.message);
+    const errEl = document.getElementById('data-error-banner');
+    if (errEl) {
+      errEl.textContent = 'Data load failed: ' + e.message + ' — ';
+      const btn = document.createElement('button');
+      btn.textContent = 'Retry';
+      btn.style.cssText = 'background:#ef4444;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:12px;margin-left:4px;';
+      btn.onclick = () => { errEl.textContent = ''; loadData(); };
+      errEl.appendChild(btn);
+      errEl.style.display = 'block';
+    }
   } finally {
     loading = false;
     setRefreshing(false);
@@ -1097,6 +1119,7 @@ function renderScorecard() {
   const showsP  = callsP.filter(c => isShow(c)).length;
   const closes  = calls.filter(c => fv(c,'Outcome') === 'Closed').length;
   const closesP = callsP.filter(c => fv(c,'Outcome') === 'Closed').length;
+  const noDataCalls = calls.filter(c => fv(c,'Show') == null && !fv(c,'Outcome') && new Date(fv(c,'Call Date')) < D.today()).length;
   // Revenue from Commissions (Whop source of truth — Whop Payment ID required)
   const commDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
   const rev  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
@@ -1146,7 +1169,7 @@ function renderScorecard() {
   // ── Hero cards ──
   document.getElementById('sc-hero').innerHTML = [
     heroCard({ label: 'Show Rate', value: F.pct(showRate),
-      sub: `${shows} shows from ${booked} calls · Goal: ${F.pct(CFG.goals.showRate)}`,
+      sub: `${shows} shows from ${booked} calls · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · ⚠ ${noDataCalls} calls missing outcome` : ''),
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
     heroCard({ label: 'Close Rate', value: F.pct(closeRate),
@@ -1216,7 +1239,7 @@ function renderScorecard() {
   calls.forEach(c => {
     const cl = fv(c,'Closer'); if (!cl) return;
     if (!closerMap[cl]) closerMap[cl] = { shows:0, closes:0, rev:0 };
-    if (fv(c,'Show')) closerMap[cl].shows++;
+    if (isShow(c)) closerMap[cl].shows++;
     if (fv(c,'Outcome')==='Closed') { closerMap[cl].closes++; closerMap[cl].rev += fv(c,'Cash Collected')||0; }
   });
   const closerList = Object.entries(closerMap).filter(([,v])=>v.shows>0);
@@ -1251,8 +1274,8 @@ function renderScorecard() {
 
   // ── Show + close rate trend ──
   const days30 = D.last(30);
-  const showRates  = days30.map(day => { const dc=DB.calls.filter(c=>D.key(fv(c,'Call Date'))===D.key(day)); const ds=dc.filter(c=>fv(c,'Show')===true).length; return dc.length?+((ds/dc.length)*100).toFixed(1):null; });
-  const closeRates = days30.map(day => { const dc=DB.calls.filter(c=>D.key(fv(c,'Call Date'))===D.key(day)); const ds=dc.filter(c=>fv(c,'Show')===true).length; const dclose=dc.filter(c=>fv(c,'Outcome')==='Closed').length; return ds?+((dclose/ds)*100).toFixed(1):null; });
+  const showRates  = days30.map(day => { const dc=DB.calls.filter(c=>D.key(fv(c,'Call Date'))===D.key(day)); const ds=dc.filter(c=>isShow(c)).length; return dc.length?+((ds/dc.length)*100).toFixed(1):null; });
+  const closeRates = days30.map(day => { const dc=DB.calls.filter(c=>D.key(fv(c,'Call Date'))===D.key(day)); const ds=dc.filter(c=>isShow(c)).length; const dclose=dc.filter(c=>fv(c,'Outcome')==='Closed').length; return ds?+((dclose/ds)*100).toFixed(1):null; });
   mkChart('chart-rates','line', days30.map(D.shortLabel), [
     { label:'Show Rate %',  data:showRates,  borderColor:'#f59e0b', backgroundColor:'transparent', spanGaps:true },
     { label:'Close Rate %', data:closeRates, borderColor:'#10b981', backgroundColor:'transparent', spanGaps:true },
@@ -1305,7 +1328,7 @@ function renderCalls() {
   const closerStats = {};
   const allCallsInRange = DB.calls.filter(c => D.in(fv(c,'Call Date'), r));
   allCallsInRange.forEach(c => {
-    const cl = fv(c,'Closer') || (fv(c,'Show') ? 'Unattributed' : null);
+    const cl = fv(c,'Closer') || (isShow(c) ? 'Unattributed' : null);
     if (!cl) return;
     if (!closerStats[cl]) closerStats[cl] = { shows:0, closes:0, rev:0, noShows:0 };
     if (isShow(c))       closerStats[cl].shows++;
@@ -1367,8 +1390,8 @@ function renderCalls() {
     const e = new Date(s); e.setDate(s.getDate()+6); e.setHours(23,59,59,999);
     weeks8.push({ label: s.toLocaleDateString('en-US',{month:'short',day:'numeric'}), s, e });
   }
-  const wkShowRates  = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w)); const ws=wc.filter(c=>fv(c,'Show')===true).length; return wc.length?+(ws/wc.length*100).toFixed(1):null; });
-  const wkCloseRates = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w)); const ws=wc.filter(c=>fv(c,'Show')===true).length; const wclose=wc.filter(c=>fv(c,'Outcome')==='Closed').length; return ws?+(wclose/ws*100).toFixed(1):null; });
+  const wkShowRates  = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w)); const ws=wc.filter(c=>isShow(c)).length; return wc.length?+(ws/wc.length*100).toFixed(1):null; });
+  const wkCloseRates = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w)); const ws=wc.filter(c=>isShow(c)).length; const wclose=wc.filter(c=>fv(c,'Outcome')==='Closed').length; return ws?+(wclose/ws*100).toFixed(1):null; });
 
   const ctxTrend = document.getElementById('chart-calls-rates-trend');
   if (ctxTrend) new Chart(ctxTrend, {
@@ -1410,7 +1433,7 @@ function renderCalls() {
   allCallsInRange.forEach(c => {
     const s = fv(c,'Lead Source') || 'Unknown';
     srcBook[s]  = (srcBook[s]||0)+1;
-    if (fv(c,'Show')===true)       srcShowsMap[s] = (srcShowsMap[s]||0)+1;
+    if (isShow(c))                 srcShowsMap[s] = (srcShowsMap[s]||0)+1;
     if (fv(c,'Outcome')==='Closed') srcCloseMap[s] = (srcCloseMap[s]||0)+1;
   });
   const srcLabelsAll = Object.keys(srcBook).sort((a,b)=>srcBook[b]-srcBook[a]);
