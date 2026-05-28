@@ -1171,7 +1171,7 @@ function renderScorecard() {
   // ── Hero cards ──
   document.getElementById('sc-hero').innerHTML = [
     heroCard({ label: 'Show Rate', value: F.pct(showRate),
-      sub: `${shows} shows from ${booked} calls · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · ⚠ ${noDataCalls} calls missing outcome` : ''),
+      sub: `${shows} shows from ${booked} calls · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · <span id="missing-outcome-link" style="cursor:pointer;color:#fbbf24;text-decoration:underline;" onclick="openDispositionModal()">⚠ ${noDataCalls} calls missing outcome</span>` : ''),
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
     heroCard({ label: 'Close Rate', value: F.pct(closeRate),
@@ -2208,6 +2208,98 @@ async function patchCommission(recordId, fields) {
   } catch { return false; }
 }
 
+async function patchCall(recordId, fields) {
+  try {
+    const resp = await fetch(
+      `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.calls}/${recordId}`,
+      { method: 'PATCH',
+        headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields }) }
+    );
+    return resp.ok;
+  } catch { return false; }
+}
+
+const OUTCOME_SHOW_MAP = {
+  'No-Show':   false,
+  'Cancelled': false,
+  'Follow Up': true,
+  'Lost':      true,
+  'Closed':    true,
+};
+
+async function dispositionCall(recordId, outcome) {
+  const row = document.getElementById('disp-row-' + recordId);
+  const btns = row ? row.querySelectorAll('button') : [];
+  btns.forEach(b => b.disabled = true);
+  if (row) row.style.opacity = '0.5';
+
+  const fields = { Outcome: outcome };
+  if (OUTCOME_SHOW_MAP[outcome] !== undefined) fields.Show = OUTCOME_SHOW_MAP[outcome];
+
+  const ok = await patchCall(recordId, fields);
+
+  if (ok) {
+    const rec = DB.calls.find(c => c.id === recordId);
+    if (rec) { rec.fields.Outcome = outcome; if (fields.Show !== undefined) rec.fields.Show = fields.Show; }
+    if (row) { row.style.transition = 'all 0.25s'; row.style.opacity = '0'; row.style.maxHeight = '0'; row.style.overflow = 'hidden'; setTimeout(() => row.remove(), 250); }
+    setTimeout(() => {
+      const remaining = document.querySelectorAll('.disp-row').length;
+      const countEl = document.getElementById('disp-count');
+      if (countEl) countEl.textContent = remaining + ' remaining';
+      if (remaining === 0) {
+        const list = document.getElementById('disp-list');
+        if (list) list.innerHTML = '<div style="text-align:center;padding:48px;color:#10b981;font-size:15px;">✓ All caught up</div>';
+      }
+      renderScorecard();
+    }, 260);
+  } else {
+    btns.forEach(b => b.disabled = false);
+    if (row) { row.style.opacity = '1'; row.style.background = 'rgba(239,68,68,0.08)'; }
+  }
+}
+
+function openDispositionModal() {
+  const today = D.today();
+  const missing = DB.calls
+    .filter(c => fv(c,'Show') == null && !fv(c,'Outcome') && new Date(fv(c,'Call Date')) < today)
+    .sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
+
+  const BTNS = [
+    { label: 'No-Show',   color: '#ef4444' },
+    { label: 'Follow Up', color: '#f59e0b' },
+    { label: 'Lost',      color: '#6b7280' },
+    { label: 'Closed',    color: '#10b981' },
+    { label: 'Cancelled', color: '#374151' },
+  ];
+
+  const rows = missing.map(c => {
+    const name    = fv(c,'Lead Name') || '—';
+    const date    = D.fmt(fv(c,'Call Date'));
+    const closer  = fv(c,'Closer') || '—';
+    const setter  = fv(c,'Setter') || '—';
+    const btnsHTML = BTNS.map(b =>
+      `<button onclick="dispositionCall('${c.id}','${b.label}')"
+        style="background:${b.color}18;color:${b.color};border:1px solid ${b.color}40;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background 0.15s;"
+        onmouseover="this.style.background='${b.color}35'" onmouseout="this.style.background='${b.color}18'">
+        ${b.label}
+      </button>`
+    ).join('');
+    return `<div id="disp-row-${c.id}" class="disp-row" style="display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #1f1f1f;">
+      <div>
+        <div style="font-weight:600;color:#f3f4f6;font-size:13px;">${name}</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:2px;">${date} · Closer: ${closer} · Setter: ${setter}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">${btnsHTML}</div>
+    </div>`;
+  }).join('');
+
+  const modal = document.getElementById('disposition-modal');
+  document.getElementById('disp-count').textContent = missing.length + ' remaining';
+  document.getElementById('disp-list').innerHTML = rows || '<div style="text-align:center;padding:48px;color:#10b981;font-size:15px;">✓ All caught up</div>';
+  modal.style.display = 'flex';
+}
+
 function refreshCommPayoutSummary() {
   const filterPeriod = document.getElementById('comm-period')?.value || '';
   const REPS = ['Max','Ben','Will','Alen'];
@@ -2696,6 +2788,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
 });
+
 </script>
+
+<!-- Disposition Modal -->
+<div id="disposition-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:#111;border:1px solid #1f1f1f;border-radius:14px;width:100%;max-width:700px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;">
+    <!-- Header -->
+    <div style="padding:20px 24px 16px;border-bottom:1px solid #1f1f1f;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#f3f4f6;">Disposition Missing Calls</div>
+        <div id="disp-count" style="font-size:12px;color:#6b7280;margin-top:3px;"></div>
+      </div>
+      <button onclick="document.getElementById('disposition-modal').style.display='none'"
+        style="background:none;border:none;color:#6b7280;font-size:20px;cursor:pointer;line-height:1;padding:4px 8px;">&times;</button>
+    </div>
+    <!-- List -->
+    <div id="disp-list" style="overflow-y:auto;padding:0 24px;flex:1;"></div>
+  </div>
+</div>
+
 </body>
 </html>
