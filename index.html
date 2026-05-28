@@ -1117,13 +1117,15 @@ function renderScorecard() {
   const bookedP = callsP.length;
   const shows   = calls.filter(c => isShow(c)).length;
   const showsP  = callsP.filter(c => isShow(c)).length;
-  const closes  = calls.filter(c => fv(c,'Outcome') === 'Closed').length;
-  const closesP = callsP.filter(c => fv(c,'Outcome') === 'Closed').length;
   const noDataCalls = calls.filter(c => fv(c,'Show') == null && !fv(c,'Outcome') && new Date(fv(c,'Call Date')) < D.today()).length;
-  // Revenue from Commissions (Whop source of truth — Whop Payment ID required)
+  // Closes + Revenue from Commissions (Whop source of truth — unique clients who paid)
   const commDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
-  const rev  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
-  const revP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), rp)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+  const commInPeriod  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r));
+  const commInPeriodP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), rp));
+  const closes  = new Set(commInPeriod.map(c  => fv(c,'Lead Email') || c.id)).size;
+  const closesP = new Set(commInPeriodP.map(c => fv(c,'Lead Email') || c.id)).size;
+  const rev  = commInPeriod.reduce((s,c)  => s + (fv(c,'Deal Amount')||0), 0);
+  const revP = commInPeriodP.reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   const showRate   = booked > 0 ? shows / booked : 0;
   const showRateP  = bookedP > 0 ? showsP / bookedP : 0;
@@ -1173,7 +1175,7 @@ function renderScorecard() {
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
     heroCard({ label: 'Close Rate', value: F.pct(closeRate),
-      sub: `${closes} closes from ${shows} shows · Goal: ${F.pct(CFG.goals.closeRate)}`,
+      sub: `${closes} unique closes from ${shows} shows · Goal: ${F.pct(CFG.goals.closeRate)}`,
       trend: trendBadge(closeRate, closeRateP, false, v => F.pct(v)),
       goodIf: closeRate, warnBelow: CFG.goals.closeRate }),
     heroCard({ label: 'COPC', value: F.$(Math.round(copc)),
