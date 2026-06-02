@@ -2197,15 +2197,22 @@ function calcComm(deal, setter, closer, aiSetter) {
 }
 
 async function patchCommission(recordId, fields) {
-  try {
-    const resp = await fetch(
-      `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.commissions}/${recordId}`,
-      { method: 'PATCH',
-        headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields }) }
-    );
-    return resp.ok;
-  } catch { return false; }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000));
+      const resp = await fetch(
+        `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.commissions}/${recordId}`,
+        { method: 'PATCH',
+          headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields }) }
+      );
+      if (resp.ok) return true;
+      if (resp.status === 429) continue; // rate limit — retry
+      console.error('Airtable PATCH failed:', resp.status, await resp.text());
+      return false;
+    } catch (e) { console.error('Airtable PATCH error:', e); }
+  }
+  return false;
 }
 
 async function patchCall(recordId, fields) {
@@ -2617,8 +2624,21 @@ function renderCommissions() {
         rec.fields['Total Commission $']  = comm.total;
       }
 
-      await patchCommission(rid, patchFields);
-      refreshCommPayoutSummary();
+      const ok = await patchCommission(rid, patchFields);
+
+      if (ok) {
+        // Invalidate the commissions cache so a page refresh fetches fresh Airtable data
+        sessionStorage.removeItem('c_' + CFG.tables.commissions + '_');
+        refreshCommPayoutSummary();
+      } else {
+        // Save failed — show red error on the row so the user knows
+        tr.style.outline = '2px solid #ef4444';
+        const errSpan = document.createElement('span');
+        errSpan.style.cssText = 'color:#ef4444;font-size:11px;margin-left:6px;font-weight:600;';
+        errSpan.textContent = 'Save failed — retry';
+        el.parentNode.appendChild(errSpan);
+        setTimeout(() => { tr.style.outline = ''; errSpan.remove(); }, 4000);
+      }
     }
 
     // Remove saving dot
