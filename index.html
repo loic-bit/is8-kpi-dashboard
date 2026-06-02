@@ -2326,7 +2326,7 @@ function refreshCommPayoutSummary() {
       if (setter === rep) earned += sAmt;
       if (closer === rep) earned += cAmt;
       if (!earned) return;
-      if (isDeposit && status === 'Refunded') return;
+      if (status === 'Refunded') return;
       if (isDeposit) { totalOnHold += earned; return; }
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
@@ -2396,12 +2396,20 @@ function renderCommissions() {
     .filter(x => (x.f['Status']||'Pending') === 'Pending' && (x.f['Payment Type']||'Full Payment') !== 'Deposit' && (!x.setter || !x.closer))
     .length;
 
+  // Last close date (for cross-referencing data freshness — issue 16)
+  const closeDates = DB.commissions.map(c => fv(c,'Close Date')).filter(Boolean).sort().reverse();
+  const lastCloseDate = closeDates[0] || null;
+  const lastCloseDaysAgo = lastCloseDate
+    ? Math.floor((Date.now() - new Date(lastCloseDate).getTime()) / 86400000) : null;
+  const staleData = lastCloseDaysAgo !== null && lastCloseDaysAgo > 14;
+
   const bannerColor = daysUntil <= 3 ? '#ef4444' : daysUntil <= 7 ? '#f59e0b' : '#10b981';
   document.getElementById('comm-payout-banner').innerHTML = `
     <div style="background:#111; border:1px solid ${bannerColor}33; border-radius:10px; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <div style="display:flex; align-items:center; gap:10px;">
         <div style="width:8px; height:8px; border-radius:50%; background:${bannerColor};"></div>
         <span style="font-size:13px; color:#d1d5db; font-weight:500;">Next payout: <strong style="color:#fff;">${nextPayoutLabel}</strong> <span style="color:#6b7280;">&nbsp;·&nbsp; ${daysUntil} day${daysUntil!==1?'s':''} away</span></span>
+        ${lastCloseDate ? `<span style="font-size:12px; color:#6b7280;">&nbsp;·&nbsp; Last close: <strong style="color:${staleData?'#ef4444':'#d1d5db'};">${lastCloseDate}</strong>${staleData ? ' <span style="color:#ef4444;">&#9888; stale</span>' : ''}</span>` : ''}
       </div>
       <div style="display:flex; gap:20px; align-items:center;">
         <span style="font-size:13px; color:#d1d5db;">Approved to pay: <strong style="color:#3b82f6;">${F.$(approvedTotal)}</strong></span>
@@ -2430,7 +2438,7 @@ function renderCommissions() {
 
   const SETTER_OPTS    = ['', 'Max', 'Ben'];
   const CLOSER_OPTS    = ['', 'Max', 'Will', 'Alen'];
-  const STATUS_OPTS         = ['Pending', 'Approved', 'Paid'];
+  const STATUS_OPTS         = ['Pending', 'Approved', 'Paid', 'Refunded'];
   const DEPOSIT_STATUS_OPTS = ['Pending', 'Approved', 'Paid', 'Refunded'];
   const PAY_TYPE_OPTS       = ['Full Payment', 'Deposit'];
 
@@ -2442,8 +2450,8 @@ function renderCommissions() {
     const payType  = f['Payment Type'] || 'Full Payment';
     const isDeposit = payType === 'Deposit';
 
-    const isRefunded = isDeposit && status === 'Refunded';
-    const commColor = isDeposit ? '#6b7280' : '#10b981';
+    const isRefunded = status === 'Refunded';
+    const commColor = isRefunded ? '#ef4444' : isDeposit ? '#6b7280' : '#10b981';
     const commLabel = isRefunded
       ? `<span style="font-size:10px;color:#ef4444;font-weight:600;">REFUNDED</span>`
       : isDeposit
@@ -2458,7 +2466,7 @@ function renderCommissions() {
     };
     const glow = STATUS_GLOW[status] || { accent: '#374151', bg: 'transparent' };
 
-    return `<tr data-rid="${rid}" style="background:${glow.bg}; ${isDeposit ? 'opacity:0.75;' : ''}">
+    return `<tr data-rid="${rid}" style="background:${glow.bg}; ${isDeposit ? 'opacity:0.75;' : isRefunded ? 'opacity:0.6;' : ''}">
       <td style="border-left:3px solid ${glow.accent}; color:#d1d5db; font-weight:500; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${f['Lead Name']||'—'}</td>
       <td style="color:#6b7280; white-space:nowrap;">${f['Close Date']||'—'}</td>
       <td class="r" style="color:#fff; font-weight:700; white-space:nowrap;">${F.$(deal)}</td>
@@ -2480,8 +2488,8 @@ function renderCommissions() {
       <td style="text-align:center; vertical-align:middle;">
         <input type="checkbox" class="comm-chk" data-field="AI Setter" ${aiSet?'checked':''} title="AI Setter involved">
       </td>
-      <td class="r comm-s-cell" style="color:${isDeposit?'#6b7280':'#60a5fa'}; font-size:12px; white-space:nowrap;">${isDeposit?'—':(comm.sPct>0?comm.sPct+'% / '+F.$(comm.sAmt):'—')}</td>
-      <td class="r comm-c-cell" style="color:${isDeposit?'#6b7280':'#a78bfa'}; font-size:12px; white-space:nowrap;">${isDeposit?'—':(comm.cPct>0?comm.cPct+'% / '+F.$(comm.cAmt):'—')}</td>
+      <td class="r comm-s-cell" style="color:${(isDeposit||isRefunded)?'#6b7280':'#60a5fa'}; font-size:12px; white-space:nowrap;">${(isDeposit||isRefunded)?'—':(comm.sPct>0?comm.sPct+'% / '+F.$(comm.sAmt):'—')}</td>
+      <td class="r comm-c-cell" style="color:${(isDeposit||isRefunded)?'#6b7280':'#a78bfa'}; font-size:12px; white-space:nowrap;">${(isDeposit||isRefunded)?'—':(comm.cPct>0?comm.cPct+'% / '+F.$(comm.cAmt):'—')}</td>
       <td class="r comm-t-cell" style="font-weight:700; color:${commColor}; font-size:14px; white-space:nowrap;">${commLabel}</td>
       <td style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Pay Period']||'—'}</td>
       <td class="comm-paid-date" style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Paid Date']||'—'}</td>
@@ -2505,7 +2513,9 @@ function renderCommissions() {
     if (!rid) return;
 
     const field = el.dataset.field;
-    const value = el.type === 'checkbox' ? el.checked : el.value;
+    // Send null to Airtable to clear single-select fields; empty string won't clear them
+    const rawValue = el.type === 'checkbox' ? el.checked : el.value;
+    const value = rawValue === '' ? null : rawValue;
 
     // Show saving dot
     const dot = document.createElement('span');
@@ -2519,14 +2529,16 @@ function renderCommissions() {
       rec.fields[field] = value;
 
       // Recalculate commissions for this row
-      const deal   = parseFloat(rec.fields['Deal Amount'] || 0);
-      const setter = rec.fields['Setter'] || '';
-      const closer = rec.fields['Closer'] || '';
-      const aiSet  = !!rec.fields['AI Setter'];
-      const comm   = calcComm(deal, setter, closer, aiSet);
+      const deal       = parseFloat(rec.fields['Deal Amount'] || 0);
+      const setter     = rec.fields['Setter'] || '';
+      const closer     = rec.fields['Closer'] || '';
+      const aiSet      = !!rec.fields['AI Setter'];
+      const comm       = calcComm(deal, setter, closer, aiSet);
+      const isDeposit  = (rec.fields['Payment Type'] || 'Full Payment') === 'Deposit';
+      const isRefunded = (rec.fields['Status'] || '') === 'Refunded';
 
-      // Recalculate deposit state
-      const isDeposit = (rec.fields['Payment Type'] || 'Full Payment') === 'Deposit';
+      // Declare patchFields here so the Status block below can add Paid Date to it
+      const patchFields = { [field]: value };
 
       // Update commission cells in this row
       const sCell = tr.querySelector('.comm-s-cell');
@@ -2538,9 +2550,22 @@ function renderCommissions() {
         tCell.innerHTML = '<span style="font-size:10px;color:#f59e0b;font-weight:600;">ON HOLD</span>';
         tCell.style.color = '#f59e0b';
         tr.style.opacity = '0.75';
-        // Disable status select
         const statusSel = tr.querySelector('[data-field="Status"]');
         if (statusSel) { statusSel.disabled = true; statusSel.title = 'Deposit — held until fully paid'; }
+      } else if (isRefunded) {
+        sCell.textContent = '—'; sCell.style.color = '#6b7280';
+        cCell.textContent = '—'; cCell.style.color = '#6b7280';
+        tCell.innerHTML = '<span style="font-size:10px;color:#ef4444;font-weight:600;">REFUNDED</span>';
+        tCell.style.color = '#ef4444';
+        tr.style.opacity = '0.6';
+        const statusSel = tr.querySelector('[data-field="Status"]');
+        if (statusSel) { statusSel.disabled = false; statusSel.title = ''; }
+        // Zero out commissions in Airtable for refunded deals
+        patchFields['Setter Commission %'] = 0;
+        patchFields['Setter Commission $'] = 0;
+        patchFields['Closer Commission %'] = 0;
+        patchFields['Closer Commission $'] = 0;
+        patchFields['Total Commission $']  = 0;
       } else {
         sCell.textContent = comm.sPct>0 ? comm.sPct+'% / '+F.$(comm.sAmt) : '—';
         sCell.style.color = '#60a5fa';
@@ -2560,7 +2585,7 @@ function renderCommissions() {
 
       // Re-apply glow when status changes
       if (field === 'Status') {
-        const GLOW_MAP = { 'Paid': { accent: '#10b981', bg: 'rgba(16,185,129,0.06)' }, 'Approved': { accent: '#3b82f6', bg: 'rgba(59,130,246,0.06)' }, 'Pending': { accent: '#f59e0b', bg: 'rgba(245,158,11,0.04)' } };
+        const GLOW_MAP = { 'Paid': { accent: '#10b981', bg: 'rgba(16,185,129,0.06)' }, 'Approved': { accent: '#3b82f6', bg: 'rgba(59,130,246,0.06)' }, 'Pending': { accent: '#f59e0b', bg: 'rgba(245,158,11,0.04)' }, 'Refunded': { accent: '#ef4444', bg: 'rgba(239,68,68,0.06)' } };
         const g = GLOW_MAP[value] || { accent: '#374151', bg: 'transparent' };
         tr.style.background = g.bg;
         const firstTd = tr.querySelector('td');
@@ -2570,23 +2595,21 @@ function renderCommissions() {
 
         // Auto-stamp Paid Date when status moves to Paid
         if (value === 'Paid' && !rec.fields['Paid Date']) {
-          const today = new Date().toISOString().split('T')[0];
-          rec.fields['Paid Date'] = today;
+          const todayStr = new Date().toISOString().split('T')[0];
+          rec.fields['Paid Date'] = todayStr;
           const paidDateCell = tr.querySelector('.comm-paid-date');
-          if (paidDateCell) paidDateCell.textContent = today;
-          patchFields['Paid Date'] = today;
+          if (paidDateCell) paidDateCell.textContent = todayStr;
+          patchFields['Paid Date'] = todayStr;
         }
       }
 
-      // Patch Airtable — include updated commission amounts
-      const patchFields = { [field]: value };
-      if (field !== 'Status' && field !== 'Payment Type') {
+      // Include updated commission amounts when setter/closer/AI changes (not on refunded)
+      if (field !== 'Status' && field !== 'Payment Type' && !isRefunded) {
         patchFields['Setter Commission %'] = comm.sPct;
         patchFields['Setter Commission $'] = comm.sAmt;
         patchFields['Closer Commission %'] = comm.cPct;
         patchFields['Closer Commission $'] = comm.cAmt;
         patchFields['Total Commission $']  = comm.total;
-        // Also update stored setter/closer in rec.fields
         rec.fields['Setter Commission %'] = comm.sPct;
         rec.fields['Setter Commission $'] = comm.sAmt;
         rec.fields['Closer Commission %'] = comm.cPct;
