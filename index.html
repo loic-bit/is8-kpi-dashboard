@@ -1129,8 +1129,10 @@ function renderScorecard() {
 
   const showRate   = booked > 0 ? shows / booked : 0;
   const showRateP  = bookedP > 0 ? showsP / bookedP : 0;
-  const closeRate  = shows > 0 ? closes / shows : 0;
-  const closeRateP = showsP > 0 ? closesP / showsP : 0;
+  const closeRateRaw = shows > 0 ? closes / shows : 0;
+  const closeRate    = Math.min(closeRateRaw, 1); // cap at 100% — extra closes are DM/untracked-call closes
+  const closeRateP   = showsP > 0 ? Math.min(closesP / showsP, 1) : 0;
+  const unmatchedCloses = Math.max(0, closes - shows); // closes with no matching tracked show
   const copc       = shows > 0 ? rev / shows : 0;
   const copcP      = showsP > 0 ? revP / showsP : 0;
   const avgDeal    = closes > 0 ? rev / closes : 0;
@@ -1175,7 +1177,8 @@ function renderScorecard() {
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
     heroCard({ label: 'Close Rate', value: F.pct(closeRate),
-      sub: `${closes} unique closes from ${shows} shows · Goal: ${F.pct(CFG.goals.closeRate)}`,
+      sub: `${closes} unique closes from ${shows} shows · Goal: ${F.pct(CFG.goals.closeRate)}`
+        + (unmatchedCloses > 0 ? ` · <span style="color:#f59e0b;">${unmatchedCloses} close${unmatchedCloses>1?'s':''} outside tracked calls (DM/direct)</span>` : ''),
       trend: trendBadge(closeRate, closeRateP, false, v => F.pct(v)),
       goodIf: closeRate, warnBelow: CFG.goals.closeRate }),
     heroCard({ label: 'COPC', value: F.$(Math.round(copc)),
