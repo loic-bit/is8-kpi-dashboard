@@ -2216,15 +2216,22 @@ async function patchCommission(recordId, fields) {
 }
 
 async function patchCall(recordId, fields) {
-  try {
-    const resp = await fetch(
-      `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.calls}/${recordId}`,
-      { method: 'PATCH',
-        headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields }) }
-    );
-    return resp.ok;
-  } catch { return false; }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1500));
+      const resp = await fetch(
+        `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.calls}/${recordId}`,
+        { method: 'PATCH',
+          headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields }) }
+      );
+      if (resp.ok) return true;
+      if (resp.status === 429) continue; // rate limited — retry after delay
+      console.error('patchCall failed:', resp.status, await resp.text());
+      return false;
+    } catch (e) { console.error('patchCall error:', e); }
+  }
+  return false;
 }
 
 const OUTCOME_SHOW_MAP = {
@@ -2247,6 +2254,9 @@ async function dispositionCall(recordId, outcome) {
   const ok = await patchCall(recordId, fields);
 
   if (ok) {
+    // Invalidate calls cache so a page refresh fetches updated outcomes from Airtable
+    Object.keys(sessionStorage).filter(k => k.startsWith('c_' + CFG.tables.calls)).forEach(k => sessionStorage.removeItem(k));
+
     const rec = DB.calls.find(c => c.id === recordId);
     if (rec) { rec.fields.Outcome = outcome; if (fields.Show !== undefined) rec.fields.Show = fields.Show; }
     if (row) { row.style.transition = 'all 0.25s'; row.style.opacity = '0'; row.style.maxHeight = '0'; row.style.overflow = 'hidden'; setTimeout(() => row.remove(), 250); }
@@ -2262,7 +2272,15 @@ async function dispositionCall(recordId, outcome) {
     }, 260);
   } else {
     btns.forEach(b => b.disabled = false);
-    if (row) { row.style.opacity = '1'; row.style.background = 'rgba(239,68,68,0.08)'; }
+    if (row) {
+      row.style.opacity = '1';
+      row.style.background = 'rgba(239,68,68,0.08)';
+      // Show visible error so the user knows to retry
+      const errEl = document.createElement('div');
+      errEl.style.cssText = 'font-size:11px;color:#ef4444;font-weight:600;margin-top:4px;';
+      errEl.textContent = '⚠ Save failed — click a button to retry';
+      row.querySelector('div').appendChild(errEl);
+    }
   }
 }
 
