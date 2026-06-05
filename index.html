@@ -1306,21 +1306,37 @@ function renderCalls() {
   calls.sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
 
   const shows  = calls.filter(c => isShow(c)).length;
-  const closes = calls.filter(c => fv(c,'Outcome') === 'Closed').length;
-  const rev    = calls.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
+
+  // Use Whop payments as close signal (same source as Scorecard) — GHL Outcome='Closed' is
+  // unreliable because reps mark Follow Up even when a deal closes and the client pays on Whop.
+  const commPaidEmails = new Set(
+    DB.commissions
+      .filter(c => (fv(c,'Whop Payment ID')||'').length > 0)
+      .map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean)
+  );
+  const callIsClosed = c => fv(c,'Outcome') === 'Closed'
+    || commPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase());
+  const closes = calls.filter(c => isShow(c) && callIsClosed(c)).length;
+
+  // Revenue from commissions matched to calls in this period
+  const rev = DB.commissions
+    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(fv(c,'Close Date') || (c.createdTime||'').split('T')[0], r))
+    .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   const showRate  = calls.length ? shows / calls.length : 0;
-  const closeRate = shows ? closes / shows : 0;
-  const avgDeal   = closes ? rev / closes : 0;
+  const closeRate = Math.min(shows ? closes / shows : 0, 1);
+  const avgDeal   = closes > 0 && rev > 0 ? rev / closes : 0;
 
   // prev period for trends
   const pr = prevRange(document.getElementById('calls-range').value);
   const prevCalls  = DB.calls.filter(c => D.in(fv(c,'Call Date'), pr));
   const prevShows  = prevCalls.filter(c => isShow(c)).length;
-  const prevCloses = prevCalls.filter(c => fv(c,'Outcome') === 'Closed').length;
+  const prevCloses = prevCalls.filter(c => isShow(c) && callIsClosed(c)).length;
   const prevShowRate  = prevCalls.length ? prevShows / prevCalls.length : 0;
-  const prevCloseRate = prevShows ? prevCloses / prevShows : 0;
-  const prevRev = prevCalls.reduce((s,c) => s + (fv(c,'Cash Collected')||0), 0);
+  const prevCloseRate = prevShows ? Math.min(prevCloses / prevShows, 1) : 0;
+  const prevRev = DB.commissions
+    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(fv(c,'Close Date') || (c.createdTime||'').split('T')[0], pr))
+    .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   document.getElementById('calls-kpis').innerHTML = [
     kpiCardTrend({ label:'Calls Booked', value: calls.length, trend: trendBadge(calls.length, prevCalls.length, false), accent:'#60a5fa' }),
@@ -1329,7 +1345,7 @@ function renderCalls() {
     kpiCardTrend({ label:'Close Rate',   value: F.pct(closeRate), trend: trendBadge(closeRate, prevCloseRate, false, v=>F.pct(v)), accent: closeRate >= CFG.goals.closeRate ? '#10b981' : '#ef4444',
       goalPct: closeRate / CFG.goals.closeRate, goalLabel: `Goal: ${F.pct(CFG.goals.closeRate)}` }),
     kpiCardTrend({ label:'Revenue',      value: F.$(rev),         trend: trendBadge(rev, prevRev, false, v=>F.$(Math.round(v))),  accent:'#f59e0b' }),
-    kpiCardTrend({ label:'Avg Deal Size',value: F.$(Math.round(avgDeal)), accent:'#a78bfa' }),
+    kpiCardTrend({ label:'Avg Deal Size',value: closes > 0 && rev > 0 ? F.$(Math.round(rev/closes)) : '—', accent:'#a78bfa' }),
   ].join('');
 
   // ── Closer leaderboard ──
