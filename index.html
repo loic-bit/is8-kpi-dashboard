@@ -1121,21 +1121,33 @@ function renderScorecard() {
   const shows   = calls.filter(c => isShow(c)).length;
   const showsP  = callsP.filter(c => isShow(c)).length;
   const noDataCalls = calls.filter(c => fv(c,'Show') == null && !fv(c,'Outcome') && new Date(fv(c,'Call Date')) < D.today()).length;
-  // Closes + Revenue from Commissions (Whop source of truth — unique clients who paid)
+  // Revenue: Whop payments whose Close Date falls in this period
   const commDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
   const commInPeriod  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r));
   const commInPeriodP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), rp));
-  const closes  = new Set(commInPeriod.map(c  => fv(c,'Lead Email') || c.id)).size;
-  const closesP = new Set(commInPeriodP.map(c => fv(c,'Lead Email') || c.id)).size;
   const rev  = commInPeriod.reduce((s,c)  => s + (fv(c,'Deal Amount')||0), 0);
   const revP = commInPeriodP.reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
+  // Close rate: of the people who showed on a call THIS period, how many have EVER paid on Whop?
+  // Matched by email — handles follow-up closes (paid after the call period) accurately.
+  const everPaidEmails = new Set(
+    DB.commissions
+      .filter(c => (fv(c,'Whop Payment ID')||'').length > 0)
+      .map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean)
+  );
+  const showRecords  = calls.filter(c => isShow(c));
+  const showRecordsP = callsP.filter(c => isShow(c));
+  const closes  = showRecords.filter(c => everPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+  const closesP = showRecordsP.filter(c => everPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+  // Also count period revenue from shows with no email match (DM closes / untracked calls)
+  const periodPays = new Set(commInPeriod.map(c => fv(c,'Lead Email')||c.id));
+  const showEmails = new Set(showRecords.map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean));
+  const unmatchedCloses = commInPeriod.filter(c => !showEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+
   const showRate   = booked > 0 ? shows / booked : 0;
   const showRateP  = bookedP > 0 ? showsP / bookedP : 0;
-  const closeRateRaw = shows > 0 ? closes / shows : 0;
-  const closeRate    = Math.min(closeRateRaw, 1); // cap at 100% — extra closes are DM/untracked-call closes
-  const closeRateP   = showsP > 0 ? Math.min(closesP / showsP, 1) : 0;
-  const unmatchedCloses = Math.max(0, closes - shows); // closes with no matching tracked show
+  const closeRate  = shows > 0 ? closes / shows : 0;
+  const closeRateP = showsP > 0 ? closesP / showsP : 0;
   const copc       = shows > 0 ? rev / shows : 0;
   const copcP      = showsP > 0 ? revP / showsP : 0;
   const avgDeal    = closes > 0 ? rev / closes : 0;
@@ -1180,8 +1192,8 @@ function renderScorecard() {
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
     heroCard({ label: 'Close Rate', value: F.pct(closeRate),
-      sub: `${closes} unique closes from ${shows} shows · Goal: ${F.pct(CFG.goals.closeRate)}`
-        + (unmatchedCloses > 0 ? ` · <span style="color:#f59e0b;">${unmatchedCloses} close${unmatchedCloses>1?'s':''} outside tracked calls (DM/direct)</span>` : ''),
+      sub: `${closes} of ${shows} shows paid · Goal: ${F.pct(CFG.goals.closeRate)}`
+        + (unmatchedCloses > 0 ? ` · <span style="color:#f59e0b;">${unmatchedCloses} DM/direct close${unmatchedCloses>1?'s':''} (no tracked call)</span>` : ''),
       trend: trendBadge(closeRate, closeRateP, false, v => F.pct(v)),
       goodIf: closeRate, warnBelow: CFG.goals.closeRate }),
     heroCard({ label: 'COPC', value: F.$(Math.round(copc)),
@@ -1823,7 +1835,7 @@ const STATUS_BADGE = { 'New':'badge-gray','Contacted':'badge-blue','Booked':'bad
 
 let _cPie=null, _cDaily=null, _cConv=null, _cWeekly=null;
 
-function renderOptins() {
+async function renderOptins() {
   const period = document.getElementById('optins-range')?.value || 'month';
   const sourceFilter = document.getElementById('optins-source')?.value || '';
   const statusFilter = document.getElementById('optins-status')?.value || '';
@@ -1891,44 +1903,66 @@ function renderOptins() {
   );
   const isPaid = rec => paidEmails.has((fv(rec,'Email')||'').toLowerCase());
 
-  function buildConvFunnel(label, color, icon, recs) {
-    const total = recs.length;
-    if (total === 0) return `<div class="kpi-card" style="opacity:0.5;"><p style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;">${icon} ${label}</p><p style="color:#4b5563;font-size:13px;">No data this period</p></div>`;
+  function buildConvFunnel(label, color, icon, recs, platformTotal, platformLabel) {
+    const airtableTotal = recs.length;
+    const topN   = platformTotal || airtableTotal; // use platform total as top of funnel if available
+    const optinRate = platformTotal && platformTotal > 0 ? airtableTotal / platformTotal : null;
+
     const booked = recs.filter(isBooked).length;
     const paid   = recs.filter(isPaid).length;
-    const bookPct = total > 0 ? booked / total : 0;
-    const payPct  = booked > 0 ? paid / booked : 0;
-    const closePct = total > 0 ? paid / total : 0;
+    const bookPct  = airtableTotal > 0 ? booked / airtableTotal : 0;
+    const payPct   = booked > 0 ? paid / booked : 0;
+    const closePct = airtableTotal > 0 ? paid / airtableTotal : 0;
 
     const bar = (val, max, clr) => `<div style="height:4px;background:#1e1e1e;border-radius:99px;overflow:hidden;margin-top:6px;"><div style="height:100%;width:${Math.round(Math.min(val/Math.max(max,1),1)*100)}%;background:${clr};border-radius:99px;transition:width 0.4s;"></div></div>`;
+
+    const platformRow = platformTotal ? `
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span style="font-size:12px;color:#9ca3af;">${platformLabel || 'Platform Total'}</span>
+          <span style="font-size:18px;font-weight:700;color:#fff;">${platformTotal.toLocaleString()}</span>
+        </div>
+        ${bar(platformTotal, platformTotal, color + '55')}
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span style="font-size:12px;color:#9ca3af;">Opted In / Submitted <span style="font-size:10px;color:#4b5563;">(this period)</span></span>
+          <span style="font-size:16px;font-weight:700;color:#fff;">${airtableTotal} <span style="font-size:12px;color:${optinRate>=0.1?'#10b981':'#f59e0b'};font-weight:500;">${F.pct(optinRate)}</span></span>
+        </div>
+        ${bar(airtableTotal, platformTotal, color)}
+      </div>` : `
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span style="font-size:12px;color:#9ca3af;">Opt-ins / Applications <span style="font-size:10px;color:#4b5563;">(this period)</span></span>
+          <span style="font-size:18px;font-weight:700;color:#fff;">${airtableTotal}</span>
+        </div>
+        ${bar(airtableTotal, airtableTotal, color)}
+      </div>`;
+
+    if (airtableTotal === 0 && !platformTotal) return `<div class="kpi-card" style="opacity:0.5;"><p style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;">${icon} ${label}</p><p style="color:#4b5563;font-size:13px;">No data this period</p></div>`;
 
     return `<div class="kpi-card">
       <p style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px;">${icon} ${label} — Conversion Funnel</p>
       <div style="display:flex;flex-direction:column;gap:10px;">
-        <div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;">
-            <span style="font-size:12px;color:#9ca3af;">Opt-ins / Applications</span>
-            <span style="font-size:18px;font-weight:700;color:#fff;">${total}</span>
-          </div>
-          ${bar(total, total, color)}
-        </div>
+        ${platformRow}
         <div>
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span style="font-size:12px;color:#9ca3af;">Booked a Call</span>
             <span style="font-size:16px;font-weight:700;color:#fff;">${booked} <span style="font-size:12px;color:${bookPct>=0.1?'#10b981':'#f59e0b'};font-weight:500;">${F.pct(bookPct)}</span></span>
           </div>
-          ${bar(booked, total, '#60a5fa')}
+          ${bar(booked, airtableTotal, '#60a5fa')}
         </div>
         <div>
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span style="font-size:12px;color:#9ca3af;">Paid / Closed</span>
-            <span style="font-size:16px;font-weight:700;color:#fff;">${paid} <span style="font-size:12px;color:${paid>0?'#10b981':'#4b5563'};font-weight:500;">${paid > 0 ? F.pct(closePct)+' of total' : '—'}</span></span>
+            <span style="font-size:16px;font-weight:700;color:#fff;">${paid} <span style="font-size:12px;color:${paid>0?'#10b981':'#4b5563'};font-weight:500;">${paid > 0 ? F.pct(closePct)+' of opted-in' : '—'}</span></span>
           </div>
-          ${bar(paid, total, '#10b981')}
+          ${bar(paid, airtableTotal, '#10b981')}
         </div>
-        ${booked > 0 ? `<div style="margin-top:2px;padding-top:10px;border-top:1px solid #1e1e1e;display:flex;gap:20px;">
+        ${booked > 0 ? `<div style="margin-top:2px;padding-top:10px;border-top:1px solid #1e1e1e;display:flex;gap:20px;flex-wrap:wrap;">
           <span style="font-size:11px;color:#6b7280;">Booked→Paid: <strong style="color:#d1d5db;">${F.pct(payPct)}</strong></span>
-          <span style="font-size:11px;color:#6b7280;">Total→Paid: <strong style="color:#d1d5db;">${F.pct(closePct)}</strong></span>
+          <span style="font-size:11px;color:#6b7280;">Opted-in→Paid: <strong style="color:#d1d5db;">${F.pct(closePct)}</strong></span>
+          ${platformTotal ? `<span style="font-size:11px;color:#6b7280;">Platform→Paid: <strong style="color:#d1d5db;">${F.pct(paid/platformTotal)}</strong></span>` : ''}
         </div>` : ''}
       </div>
     </div>`;
@@ -1937,9 +1971,17 @@ function renderOptins() {
   const kitAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Kit / Lead Magnet' && D.in(fv(rec,'Date Opted In'), r));
   const appAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Application (Typeform)' && D.in(fv(rec,'Date Opted In'), r));
   const convFunnelEl = document.getElementById('optins-conv-funnels');
+
+  // Fetch platform totals from n8n proxy (keeps API keys server-side)
+  let kitTotal = null, tfTotal = null;
+  try {
+    const stats = await fetch('https://scalewisemedia.app.n8n.cloud/webhook/platform-stats').then(r => r.ok ? r.json() : null);
+    if (stats) { kitTotal = stats.kitTotal || null; tfTotal = stats.tfTotal || null; }
+  } catch {}
+
   if (convFunnelEl) convFunnelEl.innerHTML =
-    buildConvFunnel('Kit Lead Magnet', '#10b981', '📧', kitAll) +
-    buildConvFunnel('Typeform Application', '#60a5fa', '📋', appAll);
+    buildConvFunnel('Kit Lead Magnet', '#10b981', '📧', kitAll, kitTotal, 'Total Kit Subscribers (all time)') +
+    buildConvFunnel('Typeform Application', '#60a5fa', '📋', appAll, tfTotal, 'Total Applications (all time)');
 
   // ── Pie chart ──────────────────────────────────────────
   const srcLabels = Object.keys(srcMap).sort((a,b) => srcMap[b]-srcMap[a]);
