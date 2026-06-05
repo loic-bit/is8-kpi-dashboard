@@ -1823,11 +1823,23 @@ function renderOptins() {
   const isBooked = rec => fv(rec,'Call Booked') === true || fv(rec,'Status') === 'Booked' || fv(rec,'Status') === 'Closed'
     || bookedContactIds.has(fv(rec,'GHL Contact ID'))
     || bookedEmails.has((fv(rec,'Email')||'').toLowerCase());
+
+  // IG DM opt-in records don't carry Email or GHL Contact ID — email matching always returns 0.
+  // Use calls table Lead Source count as ground truth for IG DM booking rate instead.
+  const callsBySrc = {};
+  DB.calls.forEach(c => { const s = fv(c,'Lead Source'); if (s) callsBySrc[s] = (callsBySrc[s]||0)+1; });
+  const igDmTotalOptins = DB.optins.filter(r => fv(r,'Opt-in Source') === 'IG DM').length;
+  const igDmBookedCalls = callsBySrc['IG DM'] || 0;
+  const igDmBookRate    = igDmTotalOptins > 0 ? Math.min(igDmBookedCalls / igDmTotalOptins, 1) : 0;
+
   const total   = allInRange.length;
   const closedN = allInRange.filter(rec => fv(rec,'Status') === 'Closed').length;
-  // Booking rate uses full 365-day opt-ins dataset so short period filters don't produce 0%
-  const bookedN  = DB.optins.filter(isBooked).length;
-  const bookRate = DB.optins.length > 0 ? bookedN / DB.optins.length : 0;
+
+  // Overall booking rate: email-matched sources + IG DM source-level count (avoids double-counting)
+  const nonDmOptins  = DB.optins.filter(r => fv(r,'Opt-in Source') !== 'IG DM');
+  const nonDmBooked  = nonDmOptins.filter(isBooked).length;
+  const bookedN  = nonDmBooked + igDmBookedCalls;
+  const bookRate = DB.optins.length > 0 ? Math.min(bookedN / DB.optins.length, 1) : 0;
   const closeRate = bookedN > 0 ? closedN / bookedN : 0;
 
   // Source counts
@@ -1840,15 +1852,16 @@ function renderOptins() {
 
   // Trend
   const pr = prevRange(period);
-  const prevTotal = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), pr)).length;
-  const prevBooked = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), pr) && isBooked(rec)).length;
-  const prevBookRate = prevTotal > 0 ? prevBooked / prevTotal : 0;
+  const prevTotal  = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), pr)).length;
+  const prevNonDm  = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), pr) && fv(rec,'Opt-in Source') !== 'IG DM');
+  const prevBooked = prevNonDm.filter(isBooked).length + (callsBySrc['IG DM'] || 0);
+  const prevBookRate = prevTotal > 0 ? Math.min(prevBooked / prevTotal, 1) : 0;
 
   // ── KPI cards (6) ──────────────────────────────────────
   document.getElementById('optins-kpis').innerHTML = [
     kpiCardTrend({ label:'Total Opt-ins',     value: total,           trend: trendBadge(total, prevTotal, false),                         accent:'#f59e0b' }),
     kpiCardTrend({ label:'Booking Rate',      value: F.pct(bookRate), trend: trendBadge(bookRate, prevBookRate, false, v=>F.pct(v)),       accent:'#10b981' }),
-    kpiCardTrend({ label:'IG DM',             value: dmN,             sub: total ? F.pct(dmN/total)+' of total' : '',                     accent:'#f59e0b' }),
+    kpiCardTrend({ label:'IG DM',             value: dmN,             sub: `${F.pct(igDmBookRate)} book rate · ${igDmBookedCalls} calls`,  accent:'#f59e0b' }),
     kpiCardTrend({ label:'Applications',      value: appN,            sub: total ? F.pct(appN/total)+' of total' : '',                    accent:'#60a5fa' }),
     kpiCardTrend({ label:'Kit / Lead Magnet', value: kitN,            sub: total ? F.pct(kitN/total)+' of total' : '',                    accent:'#10b981' }),
     kpiCardTrend({ label:'Skool',             value: skoolN,          sub: total ? F.pct(skoolN/total)+' of total' : 'Not yet active',    accent:'#a78bfa' }),
@@ -1979,6 +1992,10 @@ function renderOptins() {
   // ── Booking rate by source bar ──────────────────────────
   const convLabels = srcLabels.filter(s => srcMap[s] > 0);
   const convRates  = convLabels.map(s => {
+    if (s === 'IG DM') {
+      // Email matching unreliable for IG DM — use calls table source count vs all-time opt-ins
+      return Math.round(igDmBookRate * 100);
+    }
     const srcRecs = allInRange.filter(rec => fv(rec,'Opt-in Source') === s);
     const bk = srcRecs.filter(isBooked).length;
     return srcRecs.length > 0 ? Math.round(bk / srcRecs.length * 100) : 0;
@@ -2084,7 +2101,7 @@ function renderOptins() {
   const insights = [];
   const topSrc = srcLabels[0];
   if (topSrc) insights.push({ type: 'info', text: `Top source this period: <strong>${topSrc}</strong> with ${srcMap[topSrc]} leads (${F.pct(srcMap[topSrc]/total)} of total)` });
-  if (bookRate > 0) insights.push({ type: bookRate >= 0.15 ? 'good' : 'warn', text: `${F.pct(bookRate)} of all opt-ins convert to a booked call` });
+  if (bookRate > 0) insights.push({ type: bookRate >= 0.15 ? 'good' : 'warn', text: `${F.pct(bookRate)} of all opt-ins convert to a booked call · IG DM: ${F.pct(igDmBookRate)} (${igDmBookedCalls} calls from ${igDmTotalOptins} DM opt-ins)` });
   if (convLabels.length > 0) {
     const bestIdx = convRates.indexOf(Math.max(...convRates));
     if (convRates[bestIdx] > 0) insights.push({ type: 'good', text: `Highest booking rate: <strong>${convLabels[bestIdx]}</strong> at ${convRates[bestIdx]}%` });
