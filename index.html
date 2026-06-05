@@ -437,6 +437,9 @@
         <div class="skeleton" style="height:110px;"></div>
       </div>
 
+      <!-- Source Conversion Funnels (Kit + Typeform) -->
+      <div id="optins-conv-funnels" style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;"></div>
+
       <!-- Row 1: Pie + Daily line -->
       <div style="display:grid; grid-template-columns:1fr 2fr; gap:16px; margin-bottom:16px;">
         <div class="kpi-card">
@@ -1526,10 +1529,13 @@ function renderMeta() {
   const days = D.last(30);
   const labels = days.map(D.shortLabel);
   const spendD = days.map(d => DB.meta.filter(a => D.key(fv(a,'Date'))===D.key(d)).reduce((s,a)=>s+(fv(a,'Spend')||0),0));
-  const leadsD = days.map(d => DB.meta.filter(a => D.key(fv(a,'Date'))===D.key(d)).reduce((s,a)=>s+(fv(a,'Leads')||0),0));
+  // Use DM Opt-ins (TOF only) for the chart — avoids mixing with MOF Profile Visits which inflates by 30x
+  const tofOptinsD = days.map(d => DB.meta
+    .filter(a => D.key(fv(a,'Date'))===D.key(d) && fv(a,'Campaign Type')==='TOF')
+    .reduce((s,a)=>s+(fv(a,'DM Opt-ins')||fv(a,'Leads')||0),0));
   mkChart('chart-meta', 'bar', labels, [
-    { label: 'Spend ($)', data: spendD, backgroundColor: '#f59e0b', borderRadius: 3, yAxisID: 'y' },
-    { label: 'Leads',     data: leadsD, backgroundColor: '#3b82f6', borderRadius: 3, yAxisID: 'y1' },
+    { label: 'Spend ($)',     data: spendD,     backgroundColor: '#f59e0b', borderRadius: 3, yAxisID: 'y' },
+    { label: 'DM Opt-ins (TOF)', data: tofOptinsD, backgroundColor: '#3b82f6', borderRadius: 3, yAxisID: 'y1' },
   ], {
     scales: {
       x:  { grid: { display: false } },
@@ -1848,6 +1854,64 @@ function renderOptins() {
     kpiCardTrend({ label:'Skool',             value: skoolN,          sub: total ? F.pct(skoolN/total)+' of total' : 'Not yet active',    accent:'#a78bfa' }),
   ].join('');
 
+  // ── Source Conversion Funnels (Kit + Typeform) ─────────
+  const paidEmails = new Set(
+    DB.commissions
+      .filter(c => (fv(c,'Whop Payment ID')||'').length > 0)
+      .map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean)
+  );
+  const isPaid = rec => paidEmails.has((fv(rec,'Email')||'').toLowerCase());
+
+  function buildConvFunnel(label, color, icon, recs) {
+    const total = recs.length;
+    if (total === 0) return `<div class="kpi-card" style="opacity:0.5;"><p style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;">${icon} ${label}</p><p style="color:#4b5563;font-size:13px;">No data this period</p></div>`;
+    const booked = recs.filter(isBooked).length;
+    const paid   = recs.filter(isPaid).length;
+    const bookPct = total > 0 ? booked / total : 0;
+    const payPct  = booked > 0 ? paid / booked : 0;
+    const closePct = total > 0 ? paid / total : 0;
+
+    const bar = (val, max, clr) => `<div style="height:4px;background:#1e1e1e;border-radius:99px;overflow:hidden;margin-top:6px;"><div style="height:100%;width:${Math.round(Math.min(val/Math.max(max,1),1)*100)}%;background:${clr};border-radius:99px;transition:width 0.4s;"></div></div>`;
+
+    return `<div class="kpi-card">
+      <p style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px;">${icon} ${label} — Conversion Funnel</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:12px;color:#9ca3af;">Opt-ins / Applications</span>
+            <span style="font-size:18px;font-weight:700;color:#fff;">${total}</span>
+          </div>
+          ${bar(total, total, color)}
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:12px;color:#9ca3af;">Booked a Call</span>
+            <span style="font-size:16px;font-weight:700;color:#fff;">${booked} <span style="font-size:12px;color:${bookPct>=0.1?'#10b981':'#f59e0b'};font-weight:500;">${F.pct(bookPct)}</span></span>
+          </div>
+          ${bar(booked, total, '#60a5fa')}
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:12px;color:#9ca3af;">Paid / Closed</span>
+            <span style="font-size:16px;font-weight:700;color:#fff;">${paid} <span style="font-size:12px;color:${paid>0?'#10b981':'#4b5563'};font-weight:500;">${paid > 0 ? F.pct(closePct)+' of total' : '—'}</span></span>
+          </div>
+          ${bar(paid, total, '#10b981')}
+        </div>
+        ${booked > 0 ? `<div style="margin-top:2px;padding-top:10px;border-top:1px solid #1e1e1e;display:flex;gap:20px;">
+          <span style="font-size:11px;color:#6b7280;">Booked→Paid: <strong style="color:#d1d5db;">${F.pct(payPct)}</strong></span>
+          <span style="font-size:11px;color:#6b7280;">Total→Paid: <strong style="color:#d1d5db;">${F.pct(closePct)}</strong></span>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  const kitAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Kit / Lead Magnet' && D.in(fv(rec,'Date Opted In'), r));
+  const appAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Application (Typeform)' && D.in(fv(rec,'Date Opted In'), r));
+  const convFunnelEl = document.getElementById('optins-conv-funnels');
+  if (convFunnelEl) convFunnelEl.innerHTML =
+    buildConvFunnel('Kit Lead Magnet', '#10b981', '📧', kitAll) +
+    buildConvFunnel('Typeform Application', '#60a5fa', '📋', appAll);
+
   // ── Pie chart ──────────────────────────────────────────
   const srcLabels = Object.keys(srcMap).sort((a,b) => srcMap[b]-srcMap[a]);
   const pieEl = document.getElementById('chart-optins-pie');
@@ -2074,8 +2138,10 @@ function renderLeaderboard() {
     return !isDeposit && D.in(fv(c,'Close Date'), r);
   });
 
-  const CLOSERS = ['Will','Alen','Max'];
-  const SETTERS = ['Max','Ben'];
+  // Derive closer/setter lists dynamically from commission data (don't hardcode names)
+  const CLOSERS = [...new Set(DB.commissions.map(c => fv(c,'Closer')).filter(Boolean))].sort();
+  const SETTERS = [...new Set(DB.commissions.map(c => fv(c,'Setter')).filter(Boolean))].sort();
+  if (!CLOSERS.length) CLOSERS.push('Will','Alen','Max'); // fallback if no data
 
   const closerStats = CLOSERS.map(name => {
     const myComms = comms.filter(c => fv(c,'Closer') === name);
