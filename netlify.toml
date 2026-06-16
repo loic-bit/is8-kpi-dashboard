@@ -1,3 +1,7 @@
 [[edge_functions]]
   path = "/"
   function = "inject-token"
+
+[[edge_functions]]
+  path = "/index.html"
+  function = "inject-token"
