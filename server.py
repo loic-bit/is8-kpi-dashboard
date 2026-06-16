@@ -9,7 +9,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path in ('/', '/index.html', ''):
             with open('index.html', 'rb') as f:
                 html = f.read().decode('utf-8')
-            html = html.replace('</head>', f'<script>window.__AT__="{TOKEN}";</script></head>', 1)
+            idx = html.rfind('</head>')
+            if idx != -1:
+                html = html[:idx] + f'<script>window.__AT__="{TOKEN}";</script></head>' + html[idx+7:]
             body = html.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
