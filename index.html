@@ -22,6 +22,12 @@
       }
     }
   </script>
+  <!--
+    SECURITY: The Airtable token must be injected at deploy time.
+    In Netlify: Site settings > Build & deploy > Snippet injection > Before </head>:
+    <script>window.__AT__ = 'YOUR_TOKEN_HERE';</script>
+    Never commit the live token to the GitHub repo.
+  -->
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #f0f0f0; }
@@ -34,6 +40,15 @@
     /* Sidebar */
     #sidebar { width: 220px; flex-shrink: 0; background: #0d0d0d; border-right: 1px solid #1e1e1e; display: flex; flex-direction: column; height: 100vh; position: fixed; top: 0; left: 0; z-index: 10; }
     #main { margin-left: 220px; height: 100vh; overflow-y: auto; }
+
+    /* Mobile */
+    #menu-toggle { display: none; }
+    @media (max-width: 768px) {
+      #menu-toggle { display: flex !important; align-items: center; justify-content: center; }
+      #sidebar { left: -240px; z-index: 500; transition: left 0.25s ease; box-shadow: 4px 0 24px rgba(0,0,0,0.6); }
+      #sidebar.open { left: 0 !important; }
+      #main { margin-left: 0 !important; }
+    }
 
     .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 8px; cursor: pointer; transition: all 0.12s ease; color: #6b7280; font-size: 13.5px; font-weight: 500; border-left: 2px solid transparent; }
     .nav-item:hover { background: #1a1a1a; color: #d1d5db; }
@@ -136,6 +151,8 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════ APP -->
+<button id="menu-toggle" style="display:none;position:fixed;top:12px;left:12px;z-index:600;background:#1a1a1a;border:1px solid #222;color:#d1d5db;font-size:18px;cursor:pointer;padding:0;border-radius:8px;width:38px;height:38px;" aria-label="Toggle menu">&#9776;</button>
+
 <div id="app" style="display:none; height:100vh;">
 
   <!-- SIDEBAR -->
@@ -153,9 +170,12 @@
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
         Scorecard
       </div>
-      <div class="nav-item" data-view="calls">
-        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
-        Calls Pipeline
+      <div class="nav-item" data-view="calls" style="justify-content:space-between;">
+        <span style="display:flex;align-items:center;gap:10px;">
+          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:16px;height:16px;flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+          Calls Pipeline
+        </span>
+        <span id="calls-nav-badge" style="display:none;background:#ef4444;color:#fff;border-radius:999px;font-size:10px;font-weight:700;padding:1px 6px;line-height:1.6;"></span>
       </div>
       <div class="nav-item" data-view="meta">
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"/></svg>
@@ -208,15 +228,18 @@
           <h1 style="font-size:20px; font-weight:700; color:#fff;">Scorecard</h1>
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">Command center — focus on what drives scaling decisions</p>
         </div>
-        <select id="scorecard-range" class="filter-select">
-          <option value="today">Today</option>
-          <option value="yesterday">Yesterday</option>
-          <option value="week">This Week</option>
-          <option value="last7">Last 7 Days</option>
-          <option value="month" selected>This Month</option>
-          <option value="last30">Last 30 Days</option>
-          <option value="last90">Last 90 Days</option>
-        </select>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <select id="scorecard-range" class="filter-select">
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="week">This Week</option>
+            <option value="last7">Last 7 Days</option>
+            <option value="month" selected>This Month</option>
+            <option value="last30">Last 30 Days</option>
+            <option value="last90">Last 90 Days</option>
+          </select>
+          <span id="scorecard-range-label" style="font-size:11px;color:#4b5563;white-space:nowrap;"></span>
+        </div>
       </div>
 
       <!-- Data error banner -->
@@ -270,7 +293,7 @@
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">All booked and completed calls</p>
         </div>
       </div>
-      <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:18px;">
+      <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:18px; align-items:center;">
         <select id="calls-range" class="filter-select">
           <option value="week">This Week</option>
           <option value="month" selected>This Month</option>
@@ -278,6 +301,7 @@
           <option value="last90">Last 90 Days</option>
           <option value="all">All Time</option>
         </select>
+        <span id="calls-range-label" style="font-size:11px;color:#4b5563;"></span>
         <select id="calls-closer" class="filter-select">
           <option value="">All Closers</option>
           <option value="Max">Max</option>
@@ -335,13 +359,16 @@
       </div>
 
       <div id="calls-leaderboard"></div>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+        <button id="calls-export-btn" style="background:#1a1a1a;border:1px solid #222;color:#9ca3af;font-size:11px;font-weight:500;padding:5px 12px;border-radius:6px;cursor:pointer;font-family:Inter;">Export CSV</button>
+      </div>
       <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; overflow:hidden;">
         <div style="overflow-x:auto;">
           <table class="data-table">
             <thead><tr>
-              <th>Lead</th><th>Call Date</th><th>Source</th><th>Setter</th><th>Closer</th><th>Type</th><th>Show</th><th>Outcome</th><th class="r">Revenue</th><th>Rebook</th>
+              <th>Lead</th><th>Call Date</th><th>Source</th><th>Setter</th><th>Closer</th><th>Type</th><th>Show</th><th>Outcome</th><th class="r">Revenue</th><th>Rebook</th><th>Rec</th>
             </tr></thead>
-            <tbody id="calls-tbody"><tr><td colspan="10" style="text-align:center; padding:40px; color:#4b5563;">Loading...</td></tr></tbody>
+            <tbody id="calls-tbody"><tr><td colspan="11" style="text-align:center; padding:40px; color:#4b5563;">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -355,13 +382,14 @@
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">Daily spend and lead metrics by campaign</p>
         </div>
       </div>
-      <div style="display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap;">
+      <div style="display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap; align-items:center;">
         <select id="meta-range" class="filter-select">
           <option value="week">This Week</option>
           <option value="month" selected>This Month</option>
           <option value="last30">Last 30 Days</option>
           <option value="last90">Last 90 Days</option>
         </select>
+        <span id="meta-range-label" style="font-size:11px;color:#4b5563;"></span>
         <select id="meta-type" class="filter-select">
           <option value="">All Campaign Types</option>
           <option value="TOF">TOF</option>
@@ -406,6 +434,7 @@
             <option value="last90">Last 90 Days</option>
             <option value="all">All Time</option>
           </select>
+          <span id="optins-range-label" style="font-size:11px;color:#4b5563;"></span>
           <select id="optins-source" class="filter-select">
             <option value="">All Sources</option>
             <option value="IG DM">IG DM</option>
@@ -453,7 +482,7 @@
           </div>
         </div>
         <div class="kpi-card">
-          <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Daily Opt-ins — Last 30 Days</p>
+          <p id="optins-daily-title" style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Daily Opt-ins</p>
           <canvas id="chart-optins-daily" height="220"></canvas>
         </div>
       </div>
@@ -497,20 +526,19 @@
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">GHL call activity by team member</p>
         </div>
       </div>
-      <div style="display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap;">
+      <div style="display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap; align-items:center;">
         <select id="dials-range" class="filter-select">
           <option value="today">Today</option>
           <option value="yesterday">Yesterday</option>
           <option value="week" selected>This Week</option>
           <option value="month">This Month</option>
           <option value="last30">Last 30 Days</option>
+          <option value="60">Last 60 Days</option>
+          <option value="90">Last 90 Days</option>
         </select>
+        <span id="dials-range-label" style="font-size:11px;color:#4b5563;"></span>
         <select id="dials-member" class="filter-select">
           <option value="">All Team Members</option>
-          <option value="Max">Max</option>
-          <option value="Ben">Ben</option>
-          <option value="Will">Will</option>
-          <option value="Alen">Alen</option>
         </select>
         <select id="dials-direction" class="filter-select">
           <option value="">All Directions</option>
@@ -547,12 +575,15 @@
           <h1 style="font-size:20px; font-weight:700; color:#fff;">Revenue</h1>
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">Whop payments · Cash collected by product</p>
         </div>
-        <select id="rev-range" class="filter-select">
-          <option value="month" selected>This Month</option>
-          <option value="last30">Last 30 Days</option>
-          <option value="last90">Last 90 Days</option>
-          <option value="all">All Time</option>
-        </select>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <select id="rev-range" class="filter-select">
+            <option value="month" selected>This Month</option>
+            <option value="last30">Last 30 Days</option>
+            <option value="last90">Last 90 Days</option>
+            <option value="all">All Time</option>
+          </select>
+          <span id="rev-range-label" style="font-size:11px;color:#4b5563;white-space:nowrap;"></span>
+        </div>
       </div>
 
       <div id="rev-insights"></div>
@@ -593,12 +624,15 @@
           <h1 style="font-size:20px; font-weight:700; color:#fff;">Leaderboard</h1>
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">Sales team rankings · Closers and Setters</p>
         </div>
-        <select id="lb-range" class="filter-select">
-          <option value="month" selected>This Month</option>
-          <option value="last7">Last 7 Days</option>
-          <option value="last30">Last 30 Days</option>
-          <option value="all">All Time</option>
-        </select>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <select id="lb-range" class="filter-select">
+            <option value="month" selected>This Month</option>
+            <option value="last7">Last 7 Days</option>
+            <option value="last30">Last 30 Days</option>
+            <option value="all">All Time</option>
+          </select>
+          <span id="lb-range-label" style="font-size:11px;color:#4b5563;white-space:nowrap;"></span>
+        </div>
       </div>
       <div id="lb-mvp" style="margin-bottom:24px;"></div>
       <div id="lb-closers" style="margin-bottom:32px;"></div>
@@ -612,7 +646,7 @@
           <h1 style="font-size:20px; font-weight:700; color:#fff;">Commission Tracker</h1>
           <p style="font-size:13px; color:#6b7280; margin-top:3px;">5% setter · 10% closer · 2.5% DM leads · Pays 15th + EOM</p>
         </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
           <select id="comm-period" class="filter-select">
             <option value="">All Pay Periods</option>
           </select>
@@ -624,6 +658,8 @@
             <option value="">All Statuses</option>
             <option>Pending</option><option>Approved</option><option>Paid</option><option>Refunded</option>
           </select>
+          <span id="comm-count" style="font-size:11px;color:#4b5563;margin-left:4px;"></span>
+          <button id="comm-export-btn" style="background:#1a1a1a;border:1px solid #222;color:#9ca3af;font-size:11px;font-weight:500;padding:5px 12px;border-radius:6px;cursor:pointer;font-family:Inter;margin-left:auto;">Export CSV</button>
         </div>
       </div>
       <div id="comm-payout-banner" style="margin-bottom:20px;"></div>
@@ -659,10 +695,12 @@
 // CONFIG  — change password here
 // ═══════════════════════════════════════════════════════════
 const CFG = {
-  pw: 'scalewise',
+  // SHA-256 of 'scalewise' — password never stored in plain text
+  pwHash: '2ce77d9c6d54b013c56da8a059e17c456476cb773f21e87a0df677f476e1a966',
   authKey: 'swm_kpi_auth_v1',
   baseId: 'apppAaY1mCbpmXSGd',
-  token: 'patAsa34g3MxJYlE3.7d83ed6d896876ba026d97e9833c0df73238d7854fa797c9b64af2fd1444d21d',
+  // Token injected at deploy time via Netlify snippet — never commit the live value
+  token: window.__AT__ || '',
   tables: {
     leads:       'tblYr2IkIPKmrE013',
     calls:       'tblRt7VOLkoT5KPEO',
@@ -684,27 +722,42 @@ const CFG = {
 // AUTH
 // ═══════════════════════════════════════════════════════════
 const Auth = {
-  check: () => sessionStorage.getItem(CFG.authKey) === btoa(CFG.pw),
-  login(pw) {
-    if (pw === CFG.pw) { sessionStorage.setItem(CFG.authKey, btoa(CFG.pw)); return true; }
-    return false;
+  login: async function(input) {
+    const enc = new TextEncoder();
+    const buf = await crypto.subtle.digest('SHA-256', enc.encode(input));
+    const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+    const ok = hex === CFG.pwHash;
+    if (ok) sessionStorage.setItem(CFG.authKey, hex);
+    return ok;
+  },
+  check: function() {
+    return sessionStorage.getItem(CFG.authKey) === CFG.pwHash;
+  },
+  logout: function() {
+    sessionStorage.removeItem(CFG.authKey);
+    location.reload();
   }
 };
 
 // ═══════════════════════════════════════════════════════════
 // CACHE
 // ═══════════════════════════════════════════════════════════
+function cacheKey(tableId, formula) {
+  const fHash = formula ? btoa(unescape(encodeURIComponent(formula))).slice(0,20) : 'none';
+  return `c_${tableId}_${fHash}`;
+}
+
 const Cache = {
   get(k) {
     try {
-      const v = sessionStorage.getItem('c_' + k);
+      const v = sessionStorage.getItem(k);
       if (!v) return null;
       const p = JSON.parse(v);
-      if (Date.now() - p.ts > CFG.cacheTTL) { sessionStorage.removeItem('c_' + k); return null; }
+      if (Date.now() - p.ts > CFG.cacheTTL) { sessionStorage.removeItem(k); return null; }
       return p.d;
     } catch { return null; }
   },
-  set(k, d) { try { sessionStorage.setItem('c_' + k, JSON.stringify({ d, ts: Date.now() })); } catch {} },
+  set(k, d) { try { sessionStorage.setItem(k, JSON.stringify({ d, ts: Date.now() })); } catch {} },
   clear() { Object.keys(sessionStorage).filter(k => k.startsWith('c_')).forEach(k => sessionStorage.removeItem(k)); }
 };
 
@@ -712,7 +765,7 @@ const Cache = {
 // AIRTABLE API
 // ═══════════════════════════════════════════════════════════
 async function fetchTable(tableId, formula = '') {
-  const ck = tableId + '_' + formula;
+  const ck = cacheKey(tableId, formula);
   const hit = Cache.get(ck);
   if (hit) return hit;
 
@@ -771,6 +824,9 @@ async function loadData(force = false) {
   setRefreshing(true);
   setHealthDot('loading');
 
+  // UX-03: Show skeleton shimmer on the current view while fetching
+  showSkeletons('view-' + currentView);
+
   try {
     const f90lead  = "IS_AFTER({Date Added}, DATEADD(TODAY(), -90, 'days'))";
     const f90call  = "IS_AFTER({Call Date}, DATEADD(TODAY(), -90, 'days'))";
@@ -801,6 +857,7 @@ async function loadData(force = false) {
     setHealthDot('ok');
     document.getElementById('last-synced').textContent =
       new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    updateNavBadges();
     renderCurrent();
   } catch(e) {
     console.error(e);
@@ -1032,7 +1089,7 @@ function mkChart(id, type, labels, datasets, opts = {}) {
 // ═══════════════════════════════════════════════════════════
 // KPI CARD BUILDER
 // ═══════════════════════════════════════════════════════════
-function kpiCard({ label, value, sub = '', accent = false, goalPct = null, goalLabel = '' }) {
+function kpiCard({ label, value, sub = '', accent = false, goalPct = null, goalLabel = '', tip = '' }) {
   const bar = goalPct !== null ? (() => {
     const pct = Math.min(Math.max(goalPct, 0), 1);
     const col = pct >= 1 ? '#10b981' : pct >= 0.7 ? '#f59e0b' : '#ef4444';
@@ -1044,10 +1101,11 @@ function kpiCard({ label, value, sub = '', accent = false, goalPct = null, goalL
         <div class="goal-track"><div class="goal-fill" style="width:${pct*100}%; background:${col};"></div></div>
       </div>`;
   })() : '';
+  const tipIcon = tip ? `<span title="${tip}" style="cursor:help;color:#4b5563;font-size:11px;margin-left:4px;">&#9432;</span>` : '';
 
   return `
     <div class="kpi-card">
-      <div style="font-size:10.5px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px;">${label}</div>
+      <div style="font-size:10.5px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px;">${label}${tipIcon}</div>
       <div style="font-size:26px; font-weight:700; color:${accent ? '#f59e0b' : '#fff'}; line-height:1;">${value}</div>
       ${sub ? `<div style="font-size:11.5px; color:#4b5563; margin-top:5px;">${sub}</div>` : ''}
       ${bar}
@@ -1077,6 +1135,80 @@ function showBadge(show) {
   return show
     ? `<span style="color:#10b981; font-size:13px;">✓ Yes</span>`
     : `<span style="color:#374151; font-size:13px;">✗ No</span>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// TOP-LEVEL UTILITIES
+// ═══════════════════════════════════════════════════════════
+
+// Shared close-date helper — used in Scorecard, Calls, Revenue, Health
+function commDate(c) {
+  return fv(c,'Close Date') || (c.createdTime || '').split('T')[0];
+}
+
+// Format minutes as "Xh Ym" or "Y min"
+function fmtMinutes(n) {
+  if (!n || n < 1) return '0 min';
+  const h = Math.floor(n / 60);
+  const m = Math.round(n % 60);
+  return h > 0 ? `${h}h ${m}m` : `${m} min`;
+}
+
+// Empty state row for tables
+function emptyState(msg, sub = '') {
+  return `<tr><td colspan="99" style="text-align:center;padding:60px 20px;">
+    <div style="font-size:32px;margin-bottom:10px;opacity:0.4;">&#128237;</div>
+    <div style="color:#6b7280;font-size:14px;font-weight:500;">${msg}</div>
+    ${sub ? `<div style="color:#374151;font-size:12px;margin-top:5px;">${sub}</div>` : ''}
+  </td></tr>`;
+}
+
+// CSV export helper
+function downloadCSV(rows, filename) {
+  if (!rows || !rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const escape = v => JSON.stringify(v == null ? '' : String(v));
+  const csv = [headers.map(escape).join(','), ...rows.map(r => headers.map(h => escape(r[h])).join(','))].join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = filename;
+  a.click();
+}
+
+// Unified Airtable PATCH (replaces patchCall + patchCommission)
+async function patchRecord(tableId, recordId, fields) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1500));
+      const resp = await fetch(
+        `https://api.airtable.com/v0/${CFG.baseId}/${tableId}/${recordId}`,
+        { method: 'PATCH',
+          headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields }) }
+      );
+      if (resp.ok) return true;
+      if (resp.status === 429) continue;
+      console.error('Airtable PATCH failed:', resp.status, await resp.text());
+      return false;
+    } catch (e) { console.error('Airtable PATCH error:', e); }
+  }
+  return false;
+}
+
+// Skeleton loader — call before data fetch to show shimmer cards
+function showSkeletons(panelId) {
+  const el = document.getElementById(panelId);
+  if (!el) return;
+  const card = (w='100%') => `<div class="skeleton" style="height:90px;width:${w};border-radius:12px;"></div>`;
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;padding:24px;">
+    ${[card(),card(),card(),card(),card(),card()].join('')}
+  </div>`;
+}
+
+// Shared date range label formatter
+function fmtRangeLabel(r) {
+  const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `${fmt(r.s)} - ${fmt(r.e)}`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1118,11 +1250,14 @@ function renderScorecard() {
   const callsP  = DB.calls.filter(rec => D.in(fv(rec,'Call Date'), rp));
   const booked  = calls.length;
   const bookedP = callsP.length;
-  const shows   = calls.filter(c => isShow(c)).length;
-  const showsP  = callsP.filter(c => isShow(c)).length;
-  const noDataCalls = calls.filter(c => fv(c,'Show') == null && !fv(c,'Outcome') && new Date(fv(c,'Call Date')) < D.today()).length;
+  // BUG-03: exclude future-dated calls from show rate denominator/numerator
+  const todayStr = new Date().toISOString().split('T')[0];
+  const pastCalls  = calls.filter(c => (fv(c,'Call Date') || '') <= todayStr);
+  const pastCallsP = callsP.filter(c => (fv(c,'Call Date') || '') <= todayStr);
+  const shows   = pastCalls.filter(c => isShow(c)).length;
+  const showsP  = pastCallsP.filter(c => isShow(c)).length;
+  const noDataCalls = pastCalls.filter(c => fv(c,'Show') == null && !fv(c,'Outcome')).length;
   // Revenue: Whop payments whose Close Date falls in this period
-  const commDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
   const commInPeriod  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r));
   const commInPeriodP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), rp));
   const rev  = commInPeriod.reduce((s,c)  => s + (fv(c,'Deal Amount')||0), 0);
@@ -1144,8 +1279,8 @@ function renderScorecard() {
   const showEmails = new Set(showRecords.map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean));
   const unmatchedCloses = commInPeriod.filter(c => !showEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
 
-  const showRate   = booked > 0 ? shows / booked : 0;
-  const showRateP  = bookedP > 0 ? showsP / bookedP : 0;
+  const showRate   = pastCalls.length > 0 ? shows / pastCalls.length : 0;
+  const showRateP  = pastCallsP.length > 0 ? showsP / pastCallsP.length : 0;
   const closeRate  = shows > 0 ? closes / shows : 0;
   const closeRateP = showsP > 0 ? closesP / showsP : 0;
   const copc       = shows > 0 ? rev / shows : 0;
@@ -1157,9 +1292,13 @@ function renderScorecard() {
   const cac     = closes > 0 && spend > 0 ? spend / closes : null;
   const roas    = spend > 0 ? rev / spend : null;
 
+  // ── Range label ──
+  const scLbl = document.getElementById('scorecard-range-label');
+  if (scLbl) scLbl.textContent = fmtRangeLabel(r);
+
   // ── Decision alert ──
   const alertEl = document.getElementById('sc-alert');
-  if (alertEl && shows >= 3) {
+  if (alertEl && shows >= 1) {
     let alertHTML = '';
     const showOk  = showRate >= CFG.goals.showRate;
     const closeOk = closeRate >= CFG.goals.closeRate;
@@ -1182,13 +1321,13 @@ function renderScorecard() {
     }
     alertEl.innerHTML = alertHTML;
   } else if (alertEl) {
-    alertEl.innerHTML = '';
+    alertEl.innerHTML = shows === 0 ? `<div style="color:#4b5563;font-size:12px;text-align:center;padding:16px;">Not enough calls yet to generate an insight.</div>` : '';
   }
 
   // ── Hero cards ──
   document.getElementById('sc-hero').innerHTML = [
     heroCard({ label: 'Show Rate', value: F.pct(showRate),
-      sub: `${shows} shows from ${booked} calls · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · <span id="missing-outcome-link" style="cursor:pointer;color:#fbbf24;text-decoration:underline;" onclick="openDispositionModal()">⚠ ${noDataCalls} calls missing outcome</span>` : ''),
+      sub: `${shows} shows from ${pastCalls.length} past calls (${booked} total booked) · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · <span id="missing-outcome-link" style="cursor:pointer;color:#fbbf24;text-decoration:underline;" onclick="openDispositionModal()">&#9888; ${noDataCalls} calls missing outcome</span>` : ''),
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
     heroCard({ label: 'Close Rate', value: F.pct(closeRate),
@@ -1206,9 +1345,10 @@ function renderScorecard() {
   document.getElementById('sc-econ').innerHTML = [
     kpiCardTrend({ label: 'CAC', value: cac ? F.$(Math.round(cac)) : '—',
       sub: spend > 0 ? `${F.$(Math.round(spend))} spend / ${closes} closes` : 'No ad spend data',
-      accent: false }),
+      accent: false, tip: 'Ad spend divided by number of new paid clients' }),
     kpiCardTrend({ label: 'ROAS', value: roas ? roas.toFixed(2) + 'x' : '—',
-      sub: spend > 0 ? `${F.$(Math.round(rev))} rev / ${F.$(Math.round(spend))} spend` : 'No ad spend data' }),
+      sub: spend > 0 ? `${F.$(Math.round(rev))} rev / ${F.$(Math.round(spend))} spend` : 'No ad spend data',
+      tip: 'Cash collected divided by total ad spend' }),
     kpiCardTrend({ label: 'Avg Deal Size', value: F.$(Math.round(avgDeal)),
       sub: `${closes} closes this period`,
       trend: trendBadge(avgDeal, closesP > 0 ? revP/closesP : 0, false, v => F.$(Math.round(v))) }),
@@ -1282,10 +1422,9 @@ function renderScorecard() {
   const insightEl = document.getElementById('sc-insights');
   if (insightEl) insightEl.innerHTML = insights.length ? buildInsights(insights) : '';
 
-  // ── Opt-ins by source chart (always last 30 days for a meaningful baseline) ──
-  const optinRecs30 = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), D.range('last30')));
+  // ── Opt-ins by source chart (same period as Scorecard filter) ──
   const srcOptMap = {};
-  optinRecs30.forEach(r => { const s = fv(r,'Opt-in Source')||'Unknown'; srcOptMap[s]=(srcOptMap[s]||0)+1; });
+  optinRecs.forEach(rec => { const s = fv(rec,'Opt-in Source')||'Unknown'; srcOptMap[s]=(srcOptMap[s]||0)+1; });
   const srcE = Object.entries(srcOptMap).sort((a,b)=>b[1]-a[1]);
   const srcC = ['#f59e0b','#60a5fa','#10b981','#a78bfa','#f87171','#34d399'];
   mkChart('chart-source','bar', srcE.map(x=>x[0]), [{
@@ -1317,7 +1456,10 @@ function renderCalls() {
   if (type)    calls = calls.filter(c => fv(c,'Call Type') === type);
   calls.sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
 
-  const shows  = calls.filter(c => isShow(c)).length;
+  // BUG-03: exclude future calls from show rate
+  const todayStr = new Date().toISOString().split('T')[0];
+  const pastCalls = calls.filter(c => (fv(c,'Call Date') || '') <= todayStr);
+  const shows  = pastCalls.filter(c => isShow(c)).length;
 
   // Use Whop payments as close signal (same source as Scorecard) — GHL Outcome='Closed' is
   // unreliable because reps mark Follow Up even when a deal closes and the client pays on Whop.
@@ -1332,22 +1474,27 @@ function renderCalls() {
 
   // Revenue from commissions matched to calls in this period
   const rev = DB.commissions
-    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(fv(c,'Close Date') || (c.createdTime||'').split('T')[0], r))
+    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r))
     .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
-  const showRate  = calls.length ? shows / calls.length : 0;
+  const showRate  = pastCalls.length ? shows / pastCalls.length : 0;
   const closeRate = Math.min(shows ? closes / shows : 0, 1);
   const avgDeal   = closes > 0 && rev > 0 ? rev / closes : 0;
+
+  // Range label
+  const callsLbl = document.getElementById('calls-range-label');
+  if (callsLbl) callsLbl.textContent = fmtRangeLabel(r);
 
   // prev period for trends
   const pr = prevRange(document.getElementById('calls-range').value);
   const prevCalls  = DB.calls.filter(c => D.in(fv(c,'Call Date'), pr));
-  const prevShows  = prevCalls.filter(c => isShow(c)).length;
-  const prevCloses = prevCalls.filter(c => isShow(c) && callIsClosed(c)).length;
-  const prevShowRate  = prevCalls.length ? prevShows / prevCalls.length : 0;
+  const prevPastCalls = prevCalls.filter(c => (fv(c,'Call Date') || '') <= todayStr);
+  const prevShows  = prevPastCalls.filter(c => isShow(c)).length;
+  const prevCloses = prevPastCalls.filter(c => isShow(c) && callIsClosed(c)).length;
+  const prevShowRate  = prevPastCalls.length ? prevShows / prevPastCalls.length : 0;
   const prevCloseRate = prevShows ? Math.min(prevCloses / prevShows, 1) : 0;
   const prevRev = DB.commissions
-    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(fv(c,'Close Date') || (c.createdTime||'').split('T')[0], pr))
+    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), pr))
     .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   document.getElementById('calls-kpis').innerHTML = [
@@ -1360,16 +1507,16 @@ function renderCalls() {
     kpiCardTrend({ label:'Avg Deal Size',value: closes > 0 && rev > 0 ? F.$(Math.round(rev/closes)) : '—', accent:'#a78bfa' }),
   ].join('');
 
-  // ── Closer leaderboard ──
+  // ── Closer leaderboard (BUG-01: use Whop-payment close signal, same as Scorecard) ──
   const closerStats = {};
   const allCallsInRange = DB.calls.filter(c => D.in(fv(c,'Call Date'), r));
   allCallsInRange.forEach(c => {
     const cl = fv(c,'Closer') || (isShow(c) ? 'Unattributed' : null);
     if (!cl) return;
     if (!closerStats[cl]) closerStats[cl] = { shows:0, closes:0, rev:0, noShows:0 };
-    if (isShow(c))       closerStats[cl].shows++;
-    if (fv(c,'Outcome')==='Closed')  { closerStats[cl].closes++; closerStats[cl].rev += fv(c,'Cash Collected')||0; }
-    if (fv(c,'Outcome')==='No-Show') closerStats[cl].noShows++;
+    if (isShow(c))                              closerStats[cl].shows++;
+    if (isShow(c) && callIsClosed(c))         { closerStats[cl].closes++; closerStats[cl].rev += fv(c,'Cash Collected')||0; }
+    if (fv(c,'Outcome')==='No-Show')            closerStats[cl].noShows++;
   });
   const closerRows = Object.entries(closerStats)
     .sort((a,b) => b[1].rev - a[1].rev)
@@ -1389,8 +1536,8 @@ function renderCalls() {
     if (!s) return;
     if (!setterStats[s]) setterStats[s] = { booked:0, shows:0, closes:0, rev:0 };
     setterStats[s].booked++;
-    if (isShow(c))      setterStats[s].shows++;
-    if (fv(c,'Outcome')==='Closed') { setterStats[s].closes++; setterStats[s].rev += fv(c,'Cash Collected')||0; }
+    if (isShow(c))        setterStats[s].shows++;
+    if (callIsClosed(c)) { setterStats[s].closes++; setterStats[s].rev += fv(c,'Cash Collected')||0; }
   });
   const setterRows = Object.entries(setterStats)
     .sort((a,b) => b[1].booked - a[1].booked)
@@ -1414,102 +1561,92 @@ function renderCalls() {
     lbEl.innerHTML = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px;">${closerTbl}${setterTbl}</div>`;
   }
 
-  // ── Destroy old charts ──
-  ['chart-calls-rates-trend','chart-calls-outcome-pie','chart-calls-source','chart-calls-show-rate','chart-calls-close-rate'].forEach(id => {
-    const c = Chart.getChart(id); if (c) c.destroy();
-  });
-
-  // ── Weekly show/close rate trend (last 8 weeks) ──
+  // ── Weekly show/close rate trend (last 8 weeks) — uses mkChart ──
   const weeks8 = [];
   for (let i=7; i>=0; i--) {
     const s = new Date(D.today()); s.setDate(s.getDate() - i*7 - s.getDay());
     const e = new Date(s); e.setDate(s.getDate()+6); e.setHours(23,59,59,999);
     weeks8.push({ label: s.toLocaleDateString('en-US',{month:'short',day:'numeric'}), s, e });
   }
-  const wkShowRates  = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w)); const ws=wc.filter(c=>isShow(c)).length; return wc.length?+(ws/wc.length*100).toFixed(1):null; });
-  const wkCloseRates = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w)); const ws=wc.filter(c=>isShow(c)).length; const wclose=wc.filter(c=>fv(c,'Outcome')==='Closed').length; return ws?+(wclose/ws*100).toFixed(1):null; });
-
-  const ctxTrend = document.getElementById('chart-calls-rates-trend');
-  if (ctxTrend) new Chart(ctxTrend, {
-    type: 'line',
-    data: {
-      labels: weeks8.map(w=>w.label),
-      datasets: [
-        { label:'Show Rate %',  data: wkShowRates,  borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,0.08)',  borderWidth:2.5, pointRadius:4, fill:true,  tension:0.3, spanGaps:true },
-        { label:'Close Rate %', data: wkCloseRates, borderColor:'#10b981', backgroundColor:'rgba(16,185,129,0.08)',  borderWidth:2.5, pointRadius:4, fill:true,  tension:0.3, spanGaps:true },
-        { label:'Show Goal',    data: weeks8.map(()=>CFG.goals.showRate*100),  borderColor:'rgba(245,158,11,0.25)', borderWidth:1, borderDash:[4,4], pointRadius:0, fill:false },
-        { label:'Close Goal',   data: weeks8.map(()=>CFG.goals.closeRate*100), borderColor:'rgba(16,185,129,0.25)', borderWidth:1, borderDash:[4,4], pointRadius:0, fill:false },
-      ]
-    },
-    options: {
-      responsive:true,
-      plugins: { legend:{ position:'top', labels:{ color:'#9ca3af', font:{size:11}, usePointStyle:true, pointStyleWidth:8, padding:12,
-        filter: item => !item.text.includes('Goal') } }, tooltip:{ mode:'index', intersect:false, callbacks:{ label: ctx => ` ${ctx.dataset.label}: ${ctx.raw ?? '—'}%` } } },
-      scales: {
-        x: { ticks:{ color:'#9ca3af', font:{size:10} }, grid:{ color:'#1a1a1a' } },
-        y: { ticks:{ color:'#9ca3af', font:{size:11}, callback: v=>v+'%' }, grid:{ color:'#1a1a1a' }, beginAtZero:true, suggestedMax:100 }
-      }
-    }
-  });
+  const wkShowRates  = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w) && (fv(c,'Call Date')||'') <= todayStr); return wc.length?+(wc.filter(c=>isShow(c)).length/wc.length*100).toFixed(1):null; });
+  const wkCloseRates = weeks8.map(w => { const wc = DB.calls.filter(c=>D.in(fv(c,'Call Date'),w) && (fv(c,'Call Date')||'') <= todayStr); const ws=wc.filter(c=>isShow(c)).length; const wclose=wc.filter(c=>callIsClosed(c)&&isShow(c)).length; return ws?+(wclose/ws*100).toFixed(1):null; });
+  mkChart('chart-calls-rates-trend','line', weeks8.map(w=>w.label), [
+    { label:'Show Rate %',  data: wkShowRates,  borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,0.08)', borderWidth:2.5, pointRadius:4, fill:true, tension:0.3, spanGaps:true },
+    { label:'Close Rate %', data: wkCloseRates, borderColor:'#10b981', backgroundColor:'rgba(16,185,129,0.08)', borderWidth:2.5, pointRadius:4, fill:true, tension:0.3, spanGaps:true },
+    { label:'Show Goal',    data: weeks8.map(()=>CFG.goals.showRate*100),  borderColor:'rgba(245,158,11,0.25)', borderWidth:1, borderDash:[4,4], pointRadius:0, fill:false },
+    { label:'Close Goal',   data: weeks8.map(()=>CFG.goals.closeRate*100), borderColor:'rgba(16,185,129,0.25)', borderWidth:1, borderDash:[4,4], pointRadius:0, fill:false },
+  ], { plugins:{ legend:{ position:'top', labels:{ color:'#9ca3af', font:{size:11}, usePointStyle:true, pointStyleWidth:8, padding:12, filter: item => !item.text.includes('Goal') } }, tooltip:{ mode:'index', intersect:false, callbacks:{ label: ctx => ` ${ctx.dataset.label}: ${ctx.raw ?? '—'}%` } } }, scales:{ x:{ ticks:{ color:'#9ca3af', font:{size:10} }, grid:{ color:'#1a1a1a' } }, y:{ ticks:{ color:'#9ca3af', font:{size:11}, callback: v=>v+'%' }, grid:{ color:'#1a1a1a' }, beginAtZero:true, suggestedMax:100 } } });
 
   // ── Outcome pie ──
   const outcomeCounts = {};
   allCallsInRange.forEach(c => { const o = fv(c,'Outcome')||'Unknown'; outcomeCounts[o]=(outcomeCounts[o]||0)+1; });
   const outcomeColors = { 'Closed':'#10b981','No-Show':'#ef4444','Lost':'#f87171','Follow Up':'#f59e0b','Not Qualified':'#6b7280','Cancelled':'#4b5563' };
   const oLabels = Object.keys(outcomeCounts).sort((a,b)=>outcomeCounts[b]-outcomeCounts[a]);
-  const ctxPie = document.getElementById('chart-calls-outcome-pie');
-  if (ctxPie && oLabels.length) new Chart(ctxPie, {
-    type: 'doughnut',
-    data: { labels: oLabels, datasets: [{ data: oLabels.map(l=>outcomeCounts[l]), backgroundColor: oLabels.map(l=>outcomeColors[l]||'#374151'), borderWidth:0, hoverOffset:5 }] },
-    options: { cutout:'65%', responsive:true, plugins:{ legend:{ position:'bottom', labels:{ color:'#9ca3af', font:{size:11}, usePointStyle:true, pointStyleWidth:8, padding:10 } }, tooltip:{ callbacks:{ label: ctx=>`${ctx.label}: ${ctx.raw}` } } } }
-  });
+  if (oLabels.length) mkChart('chart-calls-outcome-pie','doughnut', oLabels,
+    [{ data: oLabels.map(l=>outcomeCounts[l]), backgroundColor: oLabels.map(l=>outcomeColors[l]||'#374151'), borderWidth:0, hoverOffset:5 }],
+    { cutout:'65%', plugins:{ legend:{ position:'bottom', labels:{ color:'#9ca3af', font:{size:11}, usePointStyle:true, pointStyleWidth:8, padding:10 } }, tooltip:{ callbacks:{ label: ctx=>`${ctx.label}: ${ctx.raw}` } } }, scales:{ x:{display:false}, y:{display:false} } });
 
   // ── Source charts ──
-  const srcBook={}, srcShowMap={}, srcCloseMap={}, srcShowsMap={};
+  const srcBook={}, srcShowsMap={}, srcCloseMap2={};
   allCallsInRange.forEach(c => {
     const s = fv(c,'Lead Source') || 'Unknown';
     srcBook[s]  = (srcBook[s]||0)+1;
-    if (isShow(c))                 srcShowsMap[s] = (srcShowsMap[s]||0)+1;
-    if (fv(c,'Outcome')==='Closed') srcCloseMap[s] = (srcCloseMap[s]||0)+1;
+    if (isShow(c))               srcShowsMap[s] = (srcShowsMap[s]||0)+1;
+    if (isShow(c)&&callIsClosed(c)) srcCloseMap2[s] = (srcCloseMap2[s]||0)+1;
   });
   const srcLabelsAll = Object.keys(srcBook).sort((a,b)=>srcBook[b]-srcBook[a]);
   const srcColors = ['#f59e0b','#60a5fa','#10b981','#a78bfa','#f87171','#34d399','#fbbf24','#9ca3af'];
-  const barOpts = (tooltipSuffix) => ({
-    indexAxis:'y', responsive:true,
-    plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: ctx=>` ${ctx.raw}${tooltipSuffix}` } } },
-    scales:{ x:{ ticks:{color:'#9ca3af',font:{size:11}}, grid:{color:'#1a1a1a'}, beginAtZero:true },
-             y:{ ticks:{color:'#d1d5db',font:{size:11}}, grid:{display:false} } }
-  });
+  const barOptsH = (suffix) => ({ indexAxis:'y', responsive:true, plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: ctx=>` ${ctx.raw}${suffix}` } } }, scales:{ x:{ ticks:{color:'#9ca3af',font:{size:11}}, grid:{color:'#1a1a1a'}, beginAtZero:true }, y:{ ticks:{color:'#d1d5db',font:{size:11}}, grid:{display:false} } } });
 
-  const ctxSrc = document.getElementById('chart-calls-source');
-  if (ctxSrc && srcLabelsAll.length) new Chart(ctxSrc, { type:'bar', data:{ labels:srcLabelsAll, datasets:[{ data:srcLabelsAll.map(s=>srcBook[s]||0), backgroundColor:srcColors.slice(0,srcLabelsAll.length), borderRadius:6, borderSkipped:false }] }, options:barOpts(' calls') });
-
-  const showRateBySource  = srcLabelsAll.map(s => srcBook[s] ? +((srcShowsMap[s]||0)/srcBook[s]*100).toFixed(1) : 0);
-  const closeRateBySource = srcLabelsAll.map(s => srcShowsMap[s] ? +((srcCloseMap[s]||0)/srcShowsMap[s]*100).toFixed(1) : 0);
-
-  const ctxShowR = document.getElementById('chart-calls-show-rate');
-  if (ctxShowR && srcLabelsAll.length) new Chart(ctxShowR, { type:'bar', data:{ labels:srcLabelsAll, datasets:[{ data:showRateBySource,  backgroundColor:srcColors.slice(0,srcLabelsAll.length), borderRadius:6, borderSkipped:false }] }, options:{ ...barOpts('%'), scales:{ x:{ ticks:{color:'#9ca3af',font:{size:11},callback:v=>v+'%'}, grid:{color:'#1a1a1a'}, max:100, beginAtZero:true }, y:{ ticks:{color:'#d1d5db',font:{size:11}}, grid:{display:false} } } } });
-
-  const ctxCloseR = document.getElementById('chart-calls-close-rate');
-  if (ctxCloseR && srcLabelsAll.length) new Chart(ctxCloseR, { type:'bar', data:{ labels:srcLabelsAll, datasets:[{ data:closeRateBySource, backgroundColor:srcColors.slice(0,srcLabelsAll.length), borderRadius:6, borderSkipped:false }] }, options:{ ...barOpts('%'), scales:{ x:{ ticks:{color:'#9ca3af',font:{size:11},callback:v=>v+'%'}, grid:{color:'#1a1a1a'}, max:100, beginAtZero:true }, y:{ ticks:{color:'#d1d5db',font:{size:11}}, grid:{display:false} } } } });
+  if (srcLabelsAll.length) {
+    mkChart('chart-calls-source','bar', srcLabelsAll, [{ data:srcLabelsAll.map(s=>srcBook[s]||0), backgroundColor:srcColors.slice(0,srcLabelsAll.length), borderRadius:6, borderSkipped:false }], barOptsH(' calls'));
+    mkChart('chart-calls-show-rate','bar', srcLabelsAll, [{ data:srcLabelsAll.map(s => srcBook[s] ? +((srcShowsMap[s]||0)/srcBook[s]*100).toFixed(1) : 0), backgroundColor:srcColors.slice(0,srcLabelsAll.length), borderRadius:6, borderSkipped:false }], { ...barOptsH('%'), scales:{ x:{ ticks:{color:'#9ca3af',font:{size:11},callback:v=>v+'%'}, grid:{color:'#1a1a1a'}, max:100, beginAtZero:true }, y:{ ticks:{color:'#d1d5db',font:{size:11}}, grid:{display:false} } } });
+    mkChart('chart-calls-close-rate','bar', srcLabelsAll, [{ data:srcLabelsAll.map(s => srcShowsMap[s] ? +((srcCloseMap2[s]||0)/srcShowsMap[s]*100).toFixed(1) : 0), backgroundColor:srcColors.slice(0,srcLabelsAll.length), borderRadius:6, borderSkipped:false }], { ...barOptsH('%'), scales:{ x:{ ticks:{color:'#9ca3af',font:{size:11},callback:v=>v+'%'}, grid:{color:'#1a1a1a'}, max:100, beginAtZero:true }, y:{ ticks:{color:'#d1d5db',font:{size:11}}, grid:{display:false} } } });
+  }
 
   if (!calls.length) {
-    document.getElementById('calls-tbody').innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:#374151;">No calls found for this period.</td></tr>`;
+    document.getElementById('calls-tbody').innerHTML = emptyState('No calls found for this period.', 'Try a wider date range.');
     return;
   }
-  document.getElementById('calls-tbody').innerHTML = calls.map(c => `
-    <tr>
+  document.getElementById('calls-tbody').innerHTML = calls.map(c => {
+    const callDate = fv(c,'Call Date') || '';
+    const isFuture = callDate > todayStr;
+    let showCell;
+    if (isFuture) {
+      showCell = `<span class="badge badge-blue">Scheduled</span>`;
+    } else if (isShow(c)) {
+      showCell = `<span style="color:#10b981;font-size:13px;">&#10003; Yes</span>`;
+    } else {
+      showCell = `<span style="color:#374151;font-size:13px;">&#10007; No</span>`;
+    }
+    const recUrl = fv(c,'Fathom Recording URL') || '';
+    const recCell = recUrl
+      ? `<a href="${recUrl}" target="_blank" rel="noopener" title="Open recording" style="color:#60a5fa;text-decoration:none;font-size:15px;">&#9654;</a>`
+      : `<span style="color:#374151;">—</span>`;
+    return `<tr>
       <td style="color:#fff;font-weight:500;">${fv(c,'Lead Name') || '—'}</td>
-      <td>${D.fmt(fv(c,'Call Date'))}</td>
+      <td>${D.fmt(callDate)}</td>
       <td style="color:#9ca3af;">${fv(c,'Lead Source') || '—'}</td>
       <td>${fv(c,'Setter') || '—'}</td>
       <td>${fv(c,'Closer') || '—'}</td>
       <td>${badge(fv(c,'Call Type'))}</td>
-      <td>${showBadge(fv(c,'Show'))}</td>
+      <td>${showCell}</td>
       <td>${badge(fv(c,'Outcome'))}</td>
       <td class="r" style="color:${fv(c,'Cash Collected') ? '#f59e0b' : '#374151'}; font-weight:${fv(c,'Cash Collected') ? '600' : '400'};">${F.$(fv(c,'Cash Collected'))}</td>
-      <td style="color:${fv(c,'Rebook') ? '#f59e0b' : '#374151'};">${fv(c,'Rebook') ? '↩ Rebook' : '—'}</td>
-    </tr>`).join('');
+      <td style="color:${fv(c,'Rebook') ? '#f59e0b' : '#374151'};">${fv(c,'Rebook') ? '&#8629; Rebook' : '—'}</td>
+      <td style="text-align:center;">${recCell}</td>
+    </tr>`;
+  }).join('');
+
+  // CSV export
+  const callsExportBtn = document.getElementById('calls-export-btn');
+  if (callsExportBtn) callsExportBtn.onclick = () => {
+    downloadCSV(calls.map(c => ({
+      'Lead Name': fv(c,'Lead Name'), 'Call Date': fv(c,'Call Date'),
+      'Source': fv(c,'Lead Source'), 'Closer': fv(c,'Closer'),
+      'Show': isShow(c) ? 'Yes' : 'No', 'Outcome': fv(c,'Outcome') || ''
+    })), 'calls-export.csv');
+  };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1553,12 +1690,19 @@ function renderMeta() {
       sub: bofBk > 0 ? `CPB: ${F.$(bofSpend/bofBk)}` : `Spend: ${F.$(bofSpend)}` }),
   ].join('');
 
-  // Chart
-  const days = D.last(30);
-  const labels = days.map(D.shortLabel);
-  const spendD = days.map(d => DB.meta.filter(a => D.key(fv(a,'Date'))===D.key(d)).reduce((s,a)=>s+(fv(a,'Spend')||0),0));
+  // Range label
+  const metaLbl = document.getElementById('meta-range-label');
+  if (metaLbl) metaLbl.textContent = fmtRangeLabel(r);
+
+  // Chart — respects meta-range filter (BUG-08)
+  const chartMetaDays = [];
+  const metaCur = new Date(r.s);
+  const metaToday = new Date();
+  while (metaCur <= metaToday && metaCur <= r.e) { chartMetaDays.push(new Date(metaCur)); metaCur.setDate(metaCur.getDate()+1); }
+  const labels = chartMetaDays.map(D.shortLabel);
+  const spendD = chartMetaDays.map(d => DB.meta.filter(a => D.key(fv(a,'Date'))===D.key(d)).reduce((s,a)=>s+(fv(a,'Spend')||0),0));
   // Use DM Opt-ins (TOF only) for the chart — avoids mixing with MOF Profile Visits which inflates by 30x
-  const tofOptinsD = days.map(d => DB.meta
+  const tofOptinsD = chartMetaDays.map(d => DB.meta
     .filter(a => D.key(fv(a,'Date'))===D.key(d) && fv(a,'Campaign Type')==='TOF')
     .reduce((s,a)=>s+(fv(a,'DM Opt-ins')||fv(a,'Leads')||0),0));
   mkChart('chart-meta', 'bar', labels, [
@@ -1646,6 +1790,18 @@ function renderDials() {
   const member    = document.getElementById('dials-member').value;
   const direction = document.getElementById('dials-direction').value;
 
+  // UX-06: Range label
+  const dialsLbl = document.getElementById('dials-range-label');
+  if (dialsLbl) dialsLbl.textContent = fmtRangeLabel(r);
+
+  // UX-14: Populate member dropdown dynamically from DB (once)
+  const memberEl = document.getElementById('dials-member');
+  if (memberEl && memberEl.options.length <= 1) {
+    const members = [...new Set(DB.callLog.map(d => fv(d,'Team Member')).filter(Boolean))].sort();
+    members.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; memberEl.appendChild(o); });
+    if (member) memberEl.value = member;
+  }
+
   let dials = DB.callLog.filter(d => D.in(fv(d,'Date'), r));
   if (member)    dials = dials.filter(d => fv(d,'Team Member') === member);
   if (direction) dials = dials.filter(d => fv(d,'Direction') === direction);
@@ -1661,7 +1817,7 @@ function renderDials() {
     kpiCard({ label: 'Total Dials', value: F.num(dials.length) }),
     kpiCard({ label: 'Outbound', value: F.num(outbound), sub: `${F.num(inbound)} inbound` }),
     kpiCard({ label: 'Connect Rate', value: F.pct(cRate), sub: `${connected} connected`, goalPct: cRate, goalLabel: 'Connect rate' }),
-    kpiCard({ label: 'Total Talk Time', value: Math.round(totalSec/60) + ' min', sub: 'All calls' }),
+    kpiCard({ label: 'Total Talk Time', value: fmtMinutes(Math.round(totalSec/60)), sub: 'All calls' }),
   ].join('');
 
   // Chart: last 14 days — stacked by team member
@@ -1709,15 +1865,16 @@ function renderDials() {
 // ═══════════════════════════════════════════════════════════
 function renderRevenue() {
   const r = D.range(document.getElementById('rev-range').value);
+  const revLbl = document.getElementById('rev-range-label');
+  if (revLbl) revLbl.textContent = fmtRangeLabel(r);
 
   // Source of truth: Commissions table — only real Whop payments (must have Whop Payment ID)
-  // Use Close Date (actual deal date) not createdTime (Airtable record creation date)
-  const revDate = (c) => fv(c,'Close Date') || (c.createdTime||'').split('T')[0];
+  // Use commDate() top-level helper (Close Date, falling back to record creation date)
   const payments = DB.commissions
     .filter(c => {
       const amount = fv(c,'Deal Amount') || 0;
       const whopId = fv(c,'Whop Payment ID') || '';
-      return amount > 0 && whopId.length > 0 && D.in(revDate(c), r);
+      return amount > 0 && whopId.length > 0 && D.in(commDate(c), r);
     })
     .sort((a,b) => new Date(b.createdTime||0) - new Date(a.createdTime||0));
 
@@ -1739,8 +1896,9 @@ function renderRevenue() {
       goalPct: Math.min(total / CFG.goals.monthlyRev, 1), goalLabel: `of ${F.$(CFG.goals.monthlyRev)} goal` }),
     kpiCard({ label: 'New Closes', value: payments.length, sub: `${F.$(total)} across ${payments.length} deals` }),
     kpiCard({ label: 'Avg Deal Size', value: avgDeal != null ? F.$(Math.round(avgDeal)) : '—', sub: 'All Whop payments' }),
-    kpiCard({ label: 'By Closer', value: Object.keys(byCloser).length > 0 ? '' : '—',
-      sub: Object.entries(byCloser).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${F.$(v)}`).join(' · ') }),
+    kpiCard({ label: 'By Closer', value: F.$(total), accent: true,
+      sub: Object.entries(byCloser).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${F.$(v)}`).join(' · ') || '—',
+      tip: 'Total cash collected, broken down by closer' }),
   ].join('');
 
   // Chart: by closer
@@ -1753,40 +1911,38 @@ function renderRevenue() {
     label: 'Revenue',
   }], { plugins: { legend: { display: false } } });
 
-  // Chart: cumulative revenue vs goal trajectory
-  const today = new Date();
-  const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
-  const daysElapsed = Math.min(today.getDate(), daysInMonth);
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const days = [];
-  for (let i = 0; i < daysInMonth; i++) {
-    const d = new Date(monthStart); d.setDate(i+1); days.push(d);
-  }
-  const labels = days.map(D.shortLabel);
-
+  // Chart: cumulative revenue for the selected period (BUG-05 — respects rev-range)
+  const revToday = new Date();
+  const revChartDays = [];
+  const revCur = new Date(r.s);
+  while (revCur <= revToday && revCur <= r.e) { revChartDays.push(new Date(revCur)); revCur.setDate(revCur.getDate()+1); }
+  // Cap at 180 data points for performance
+  const revDisplay = revChartDays.length > 180 ? revChartDays.filter((_,i) => i % Math.ceil(revChartDays.length/180) === 0) : revChartDays;
+  const revLabels = revDisplay.map(D.shortLabel);
   let cumRev = 0;
-  const cumRevData = days.map((d, i) => {
-    if (i >= daysElapsed) return null;
-    const dayRev = payments
-      .filter(c => revDate(c) === D.key(d))
-      .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
-    cumRev += dayRev;
-    return cumRev;
+  const cumRevData = revDisplay.map(d => {
+    const dayRev = payments.filter(c => commDate(c) === D.key(d)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+    cumRev += dayRev; return cumRev;
   });
-  const goalLine = days.map((_,i) => Math.round((CFG.goals.monthlyRev / daysInMonth) * (i+1)));
-
-  mkChart('chart-rev-daily', 'line', labels, [
+  const periodDays = Math.max(1, revChartDays.length);
+  const goalPaceLine = revDisplay.map(d => {
+    const dayN = Math.max(1, Math.round((d - r.s) / 86400000) + 1);
+    return Math.round((CFG.goals.monthlyRev / periodDays) * dayN);
+  });
+  mkChart('chart-rev-daily', 'line', revLabels, [
     { label: 'Cash Collected', data: cumRevData, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', fill: true, spanGaps: false, tension: 0.3 },
-    { label: 'Goal Pace', data: goalLine, borderColor: '#374151', borderDash: [5,4], pointRadius: 0, borderWidth: 1.5 },
+    { label: 'Goal Pace',     data: goalPaceLine, borderColor: '#374151', borderDash: [5,4], pointRadius: 0, borderWidth: 1.5, fill: false },
+    { label: 'Monthly Goal',  data: revLabels.map(() => CFG.goals.monthlyRev), borderColor: 'rgba(245,158,11,0.35)', borderDash: [6,4], borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0 },
   ], { scales: { y: { grid: { color: '#1a1a1a' }, beginAtZero: true } } });
 
   // Revenue insights
   const revInsights = [];
+  const daysElapsed = revChartDays.length;
   if (total > 0 && daysElapsed > 0) {
-    const pace = (total / daysElapsed) * daysInMonth;
+    const pace = (total / daysElapsed) * periodDays;
     const gap  = pace - CFG.goals.monthlyRev;
     revInsights.push({ type: gap >= 0 ? 'good' : 'warn',
-      text: `Projecting ${F.$(Math.round(pace))} by month-end at current ${F.$(Math.round(total/daysElapsed))}/day avg — ${gap >= 0 ? F.$(Math.round(gap)) + ' above goal' : F.$(Math.round(-gap)) + ' short of goal'}.` });
+      text: `On pace for ${F.$(Math.round(pace))} over this period at ${F.$(Math.round(total/daysElapsed))}/day avg. ${gap >= 0 ? F.$(Math.round(gap)) + ' above' : F.$(Math.round(-gap)) + ' short of'} the ${F.$(CFG.goals.monthlyRev)} goal.` });
   }
   const revInsightEl = document.getElementById('rev-insights');
   if (revInsightEl && revInsights.length) revInsightEl.innerHTML = buildInsights(revInsights);
@@ -1801,7 +1957,7 @@ function renderRevenue() {
   document.getElementById('rev-tbody').innerHTML = payments.map(c => `
     <tr>
       <td style="color:#fff;font-weight:500;">${fv(c,'Lead Name') || '—'}</td>
-      <td>${D.fmt(revDate(c))}</td>
+      <td>${D.fmt(commDate(c))}</td>
       <td>${fv(c,'Closer') ? `<span class="badge badge-amber">${fv(c,'Closer')}</span>` : '<span class="badge badge-gray">—</span>'}</td>
       <td><span class="badge ${STATUS_CLS[fv(c,'Status')]||'badge-gray'}">${fv(c,'Status')||'Pending'}</span></td>
       <td class="r" style="font-weight:700; color:#f59e0b;">${F.$(fv(c,'Deal Amount')||0)}</td>
@@ -1841,6 +1997,10 @@ async function renderOptins() {
   const statusFilter = document.getElementById('optins-status')?.value || '';
   const r = D.range(period);
 
+  // UX-06: Range label
+  const optinsLbl = document.getElementById('optins-range-label');
+  if (optinsLbl) optinsLbl.textContent = fmtRangeLabel(r);
+
   const allInRange = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), r));
   let recs = allInRange;
   if (sourceFilter) recs = recs.filter(rec => fv(rec,'Opt-in Source') === sourceFilter);
@@ -1853,10 +2013,10 @@ async function renderOptins() {
     || bookedEmails.has((fv(rec,'Email')||'').toLowerCase());
 
   // IG DM opt-in records don't carry Email or GHL Contact ID — email matching always returns 0.
-  // Use calls table Lead Source count as ground truth for IG DM booking rate instead.
+  // BUG-02: Filter calls and opt-ins to the selected period, not all-time.
   const callsBySrc = {};
-  DB.calls.forEach(c => { const s = fv(c,'Lead Source'); if (s) callsBySrc[s] = (callsBySrc[s]||0)+1; });
-  const igDmTotalOptins = DB.optins.filter(r => fv(r,'Opt-in Source') === 'IG DM').length;
+  DB.calls.filter(c => D.in(fv(c,'Call Date'), r)).forEach(c => { const s = fv(c,'Lead Source'); if (s) callsBySrc[s] = (callsBySrc[s]||0)+1; });
+  const igDmTotalOptins = DB.optins.filter(o => fv(o,'Opt-in Source') === 'IG DM' && D.in(fv(o,'Date Opted In'), r)).length;
   const igDmBookedCalls = callsBySrc['IG DM'] || 0;
   const igDmBookRate    = igDmTotalOptins > 0 ? Math.min(igDmBookedCalls / igDmTotalOptins, 1) : 0;
 
@@ -1864,10 +2024,10 @@ async function renderOptins() {
   const closedN = allInRange.filter(rec => fv(rec,'Status') === 'Closed').length;
 
   // Overall booking rate: email-matched sources + IG DM source-level count (avoids double-counting)
-  const nonDmOptins  = DB.optins.filter(r => fv(r,'Opt-in Source') !== 'IG DM');
+  const nonDmOptins  = allInRange.filter(o => fv(o,'Opt-in Source') !== 'IG DM');
   const nonDmBooked  = nonDmOptins.filter(isBooked).length;
   const bookedN  = nonDmBooked + igDmBookedCalls;
-  const bookRate = DB.optins.length > 0 ? Math.min(bookedN / DB.optins.length, 1) : 0;
+  const bookRate = allInRange.length > 0 ? Math.min(bookedN / allInRange.length, 1) : 0;
   const closeRate = bookedN > 0 ? closedN / bookedN : 0;
 
   // Source counts
@@ -1882,7 +2042,9 @@ async function renderOptins() {
   const pr = prevRange(period);
   const prevTotal  = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), pr)).length;
   const prevNonDm  = DB.optins.filter(rec => D.in(fv(rec,'Date Opted In'), pr) && fv(rec,'Opt-in Source') !== 'IG DM');
-  const prevBooked = prevNonDm.filter(isBooked).length + (callsBySrc['IG DM'] || 0);
+  const prevCallsBySrc = {};
+  DB.calls.filter(c => D.in(fv(c,'Call Date'), pr)).forEach(c => { const s = fv(c,'Lead Source'); if (s) prevCallsBySrc[s] = (prevCallsBySrc[s]||0)+1; });
+  const prevBooked = prevNonDm.filter(isBooked).length + (prevCallsBySrc['IG DM'] || 0);
   const prevBookRate = prevTotal > 0 ? Math.min(prevBooked / prevTotal, 1) : 0;
 
   // ── KPI cards (6) ──────────────────────────────────────
@@ -2016,17 +2178,19 @@ async function renderOptins() {
     });
   }
 
-  // ── Daily line chart (stacked by source) ───────────────
-  const days30 = D.last(30);
+  // ── Daily line chart — BUG-09: use selected period, not hardcoded 30 days ──
+  const chartDays = period === 'all' ? D.last(90) : period === 'week' ? D.last(7) : D.last(parseInt(period) || 30);
+  const dailyTitleEl = document.getElementById('optins-daily-title');
+  if (dailyTitleEl) dailyTitleEl.textContent = `Daily Opt-ins — ${fmtRangeLabel(r)}`;
   const dailyBySrc = {};
   srcLabels.forEach(s => { dailyBySrc[s] = {}; });
-  DB.optins.forEach(rec => {
+  allInRange.forEach(rec => {
     const k = D.key(fv(rec,'Date Opted In'));
     const s = fv(rec,'Opt-in Source') || 'Unknown';
     if (k && dailyBySrc[s] !== undefined) dailyBySrc[s][k] = (dailyBySrc[s][k]||0)+1;
   });
-  const dayLabels = days30.map(d => d.toLocaleDateString('en-US',{month:'short',day:'numeric'}));
-  const dayKeys   = days30.map(d => D.key(d));
+  const dayLabels = chartDays.map(d => d.toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+  const dayKeys   = chartDays.map(d => D.key(d));
 
   if (_cDaily) _cDaily.destroy();
   const ctxD = document.getElementById('chart-optins-daily');
@@ -2207,6 +2371,7 @@ function navigate(view) {
   if (vEl) vEl.classList.add('active');
   if (nEl) nEl.classList.add('active');
   currentView = view;
+  location.hash = view;
   if (loaded) renderCurrent();
 }
 
@@ -2216,6 +2381,10 @@ function navigate(view) {
 function renderLeaderboard() {
   const range = document.getElementById('lb-range')?.value || 'month';
   const r = D.range(range || 'month');
+
+  // UX-06: Range label
+  const lbLbl = document.getElementById('lb-range-label');
+  if (lbLbl) lbLbl.textContent = fmtRangeLabel(r);
 
   // All leaderboard stats derived purely from Commissions (source of truth)
   const comms = DB.commissions.filter(c => {
@@ -2350,50 +2519,13 @@ function calcComm(deal, setter, closer, aiSetter) {
   return { sPct, sAmt: deal * sPct / 100, cPct, cAmt: deal * cPct / 100, total: deal * (sPct + cPct) / 100 };
 }
 
-async function patchCommission(recordId, fields) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 1000));
-      const resp = await fetch(
-        `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.commissions}/${recordId}`,
-        { method: 'PATCH',
-          headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields }) }
-      );
-      if (resp.ok) return true;
-      if (resp.status === 429) continue; // rate limit — retry
-      console.error('Airtable PATCH failed:', resp.status, await resp.text());
-      return false;
-    } catch (e) { console.error('Airtable PATCH error:', e); }
-  }
-  return false;
-}
-
-async function patchCall(recordId, fields) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1500));
-      const resp = await fetch(
-        `https://api.airtable.com/v0/${CFG.baseId}/${CFG.tables.calls}/${recordId}`,
-        { method: 'PATCH',
-          headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields }) }
-      );
-      if (resp.ok) return true;
-      if (resp.status === 429) continue; // rate limited — retry after delay
-      console.error('patchCall failed:', resp.status, await resp.text());
-      return false;
-    } catch (e) { console.error('patchCall error:', e); }
-  }
-  return false;
-}
-
 const OUTCOME_SHOW_MAP = {
-  'No-Show':   false,
-  'Cancelled': false,
-  'Follow Up': true,
-  'Lost':      true,
-  'Closed':    true,
+  'No-Show':       false,
+  'Cancelled':     false,
+  'Follow Up':     true,
+  'Lost':          true,
+  'Closed':        true,
+  'Not Qualified': true,
 };
 
 async function dispositionCall(recordId, outcome) {
@@ -2405,7 +2537,7 @@ async function dispositionCall(recordId, outcome) {
   const fields = { Outcome: outcome };
   if (OUTCOME_SHOW_MAP[outcome] !== undefined) fields.Show = OUTCOME_SHOW_MAP[outcome];
 
-  const ok = await patchCall(recordId, fields);
+  const ok = await patchRecord(CFG.tables.calls, recordId, fields);
 
   if (ok) {
     // Invalidate calls cache so a page refresh fetches updated outcomes from Airtable
@@ -2445,11 +2577,12 @@ function openDispositionModal() {
     .sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
 
   const BTNS = [
-    { label: 'No-Show',   color: '#ef4444' },
-    { label: 'Follow Up', color: '#f59e0b' },
-    { label: 'Lost',      color: '#6b7280' },
-    { label: 'Closed',    color: '#10b981' },
-    { label: 'Cancelled', color: '#374151' },
+    { label: 'No-Show',       color: '#ef4444' },
+    { label: 'Follow Up',     color: '#f59e0b' },
+    { label: 'Lost',          color: '#6b7280' },
+    { label: 'Closed',        color: '#10b981' },
+    { label: 'Cancelled',     color: '#374151' },
+    { label: 'Not Qualified', color: '#d97706' },
   ];
 
   const rows = missing.map(c => {
@@ -2683,6 +2816,33 @@ function renderCommissions() {
   const tbodyEl = document.getElementById('comm-tbody');
   tbodyEl.innerHTML = tbody;
 
+  // UX-13: Record count
+  const commCountEl = document.getElementById('comm-count');
+  if (commCountEl) commCountEl.textContent = `${filtered.length} deal${filtered.length !== 1 ? 's' : ''}`;
+
+  // FEAT-01: CSV export wiring
+  const commExportBtn = document.getElementById('comm-export-btn');
+  if (commExportBtn) {
+    commExportBtn.onclick = () => {
+      const rows = filtered.map(({ f, deal, setter, closer, comm }) => ({
+        'Lead Name':     f['Lead Name'] || '',
+        'Close Date':    f['Close Date'] || '',
+        'Deal Amount':   deal,
+        'Payment Type':  f['Payment Type'] || 'Full Payment',
+        'Setter':        setter || '',
+        'Closer':        closer || '',
+        'Setter Comm':   comm.sAmt,
+        'Closer Comm':   comm.cAmt,
+        'Total Comm':    comm.total,
+        'Status':        f['Status'] || 'Pending',
+        'Pay Period':    f['Pay Period'] || '',
+        'Paid Date':     f['Paid Date'] || '',
+        'Whop ID':       f['Whop Payment ID'] || '',
+      }));
+      downloadCSV(rows, `commissions-${new Date().toISOString().slice(0,10)}.csv`);
+    };
+  }
+
   // Delegate change events on the table
   tbodyEl.onchange = async (e) => {
     const el = e.target;
@@ -2796,11 +2956,11 @@ function renderCommissions() {
         rec.fields['Total Commission $']  = comm.total;
       }
 
-      const ok = await patchCommission(rid, patchFields);
+      const ok = await patchRecord(CFG.tables.commissions, rid, patchFields);
 
       if (ok) {
-        // Invalidate the commissions cache so a page refresh fetches fresh Airtable data
-        sessionStorage.removeItem('c_' + CFG.tables.commissions + '_');
+        // Invalidate commissions cache so a page refresh fetches fresh data
+        sessionStorage.removeItem(cacheKey(CFG.tables.commissions));
         refreshCommPayoutSummary();
       } else {
         // Save failed — show red error on the row so the user knows
@@ -2834,6 +2994,24 @@ function renderCommissions() {
   `;
 }
 
+// Counts past calls missing Show/Outcome and updates the calls nav badge
+function updateNavBadges() {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const missing = DB.calls.filter(c =>
+    (fv(c,'Call Date') || '') <= todayStr &&
+    fv(c,'Show') == null &&
+    !fv(c,'Outcome')
+  ).length;
+  const badge = document.getElementById('calls-nav-badge');
+  if (!badge) return;
+  if (missing > 0) {
+    badge.textContent = missing;
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
 function renderCurrent() {
   const map = {
     scorecard:   renderScorecard,
@@ -2853,8 +3031,15 @@ function renderCurrent() {
 // VIEW: SYSTEM HEALTH
 // ═══════════════════════════════════════════════════════════
 async function renderHealth() {
+  // UX-15: 60-second cache so clicking health tab doesn't re-ping every time
+  const HEALTH_CACHE_KEY = '_health_ts';
+  const lastRun = parseInt(sessionStorage.getItem(HEALTH_CACHE_KEY) || '0');
   const panel = document.getElementById('health-panel');
   const audit = document.getElementById('health-data-audit');
+
+  if (Date.now() - lastRun < 60000 && panel.childElementCount > 1) return;
+  sessionStorage.setItem(HEALTH_CACHE_KEY, String(Date.now()));
+
   panel.innerHTML = '<div style="color:#6b7280; grid-column:1/-1;">Running checks...</div>';
 
   const AT = CFG.token;
@@ -2873,12 +3058,14 @@ async function renderHealth() {
     return r.ok;
   });
 
-  // 2. Whop connection
-  await checkHttp('Whop API', async () => {
-    const r = await fetch('https://api.whop.com/api/v2/memberships?limit=1', { headers: { Authorization: 'Bearer apik_lOhE1qIEAEReG_C1291826_Vy2bFRmj8jlPqgNB6NJyh-im2rSGYD57pKXaCfx4gOg' } });
-    const d = await r.json();
-    return !!d.data;
-  });
+  // 2. Whop data freshness — check via commissions table (avoids exposing Whop API key in browser)
+  const whopPays = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0);
+  const lastWhopDate = whopPays.map(c => fv(c,'Close Date')).filter(Boolean).sort().reverse()[0] || null;
+  const whopDaysAgo = lastWhopDate ? Math.floor((Date.now() - new Date(lastWhopDate)) / 86400000) : null;
+  checks.push({ name: 'Whop Payments in DB', ok: whopPays.length > 0,
+    detail: whopPays.length > 0
+      ? `${whopPays.length} payments tracked · last: ${lastWhopDate}${whopDaysAgo !== null && whopDaysAgo > 14 ? ' (stale)' : ''}`
+      : 'No Whop payment IDs found in commissions table' });
 
   // 3. Data freshness — last Opt-in
   const lastOptin = DB.optins.length > 0
@@ -2894,18 +3081,13 @@ async function renderHealth() {
   checks.push({ name: 'Last Call Booked', ok: !!lastCall,
     detail: lastCall ? `${fv(lastCall,'Lead Name')} — ${(lastCall.createdTime||'').slice(0,10)}` : 'No data' });
 
-  // 5. Revenue data — commissions with Whop ID
-  const whopPays = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0);
-  checks.push({ name: 'Whop Payments in DB', ok: whopPays.length > 0,
-    detail: `${whopPays.length} payments tracked` });
-
-  // 6. Show tracking gap
-  const noShowField = DB.calls.filter(c => fv(c,'Show') === null || fv(c,'Show') === undefined);
+  // 5. Show tracking gap — BUG-10: use == null (covers both null and undefined)
+  const noShowField = DB.calls.filter(c => fv(c,'Show') == null);
   const showGap = noShowField.length;
   checks.push({ name: 'Show Tracking', ok: showGap < DB.calls.length * 0.5,
     detail: showGap === DB.calls.length ? 'Fathom integration needed — deriving from Outcome' : `${DB.calls.length - showGap} of ${DB.calls.length} tracked` });
 
-  // 7. Source tracking gap
+  // 6. Source tracking gap
   const noSrc = DB.calls.filter(c => !fv(c,'Lead Source'));
   checks.push({ name: 'Lead Source Coverage', ok: noSrc.length < 10,
     detail: `${noSrc.length} calls missing source (${DB.calls.length - noSrc.length} of ${DB.calls.length} tracked)` });
@@ -2931,9 +3113,11 @@ async function renderHealth() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// AUTO REFRESH (every 5 min)
+// AUTO REFRESH (every 5 min, only when tab is visible)
 // ═══════════════════════════════════════════════════════════
-setInterval(() => { if (Auth.check()) loadData(true); }, 5 * 60 * 1000);
+setInterval(() => {
+  if (Auth.check() && document.visibilityState === 'visible') loadData(true);
+}, 5 * 60 * 1000);
 
 // ═══════════════════════════════════════════════════════════
 // INIT
@@ -2945,14 +3129,18 @@ document.addEventListener('DOMContentLoaded', () => {
   pwEl.addEventListener('focus', () => pwEl.style.borderColor = '#f59e0b');
   pwEl.addEventListener('blur',  () => pwEl.style.borderColor = '#222');
 
-  // Auth
-  function tryLogin() {
-    const ok = Auth.login(pwEl.value.trim());
+  // SEC-03: async SHA-256 login
+  async function tryLogin() {
+    const ok = await Auth.login(pwEl.value.trim());
     const err = document.getElementById('auth-err');
     if (ok) {
       document.getElementById('auth-gate').style.display = 'none';
       document.getElementById('app').style.display = 'block';
       err.style.display = 'none';
+      // UX-02: Restore view from hash
+      const hashView = location.hash.replace('#', '');
+      const views = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','commissions','health'];
+      if (hashView && views.includes(hashView)) navigate(hashView);
       loadData();
     } else {
       err.style.display = 'block';
@@ -2968,13 +3156,28 @@ document.addEventListener('DOMContentLoaded', () => {
   if (Auth.check()) {
     document.getElementById('auth-gate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
+    // UX-02: Restore view from hash on page load
+    const hashView = location.hash.replace('#', '');
+    const views = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','commissions','health'];
+    if (hashView && views.includes(hashView)) navigate(hashView);
     loadData();
   }
 
   // Nav
   document.querySelectorAll('[data-view]').forEach(el => {
-    el.addEventListener('click', () => navigate(el.dataset.view));
+    el.addEventListener('click', () => {
+      navigate(el.dataset.view);
+      // UX-01: Close mobile sidebar on nav click
+      document.getElementById('sidebar')?.classList.remove('open');
+    });
   });
+
+  // UX-01: Hamburger menu toggle
+  const menuToggle = document.getElementById('menu-toggle');
+  const sidebar = document.getElementById('sidebar');
+  if (menuToggle && sidebar) {
+    menuToggle.addEventListener('click', () => sidebar.classList.toggle('open'));
+  }
 
   // Refresh
   document.getElementById('refresh-btn').addEventListener('click', () => loadData(true));
@@ -2994,12 +3197,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el) el.addEventListener('change', fn);
   });
 
-  // Keyboard shortcuts (1-6)
+  // Keyboard shortcuts (1-9) + Escape closes disposition modal
   document.addEventListener('keydown', e => {
+    // UX-12: Escape closes disposition modal
+    if (e.key === 'Escape') {
+      const modal = document.getElementById('disposition-modal');
+      if (modal && modal.style.display !== 'none') { modal.style.display = 'none'; return; }
+    }
     if (!Auth.check() || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    const views = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','commissions','health'];
+    const viewList = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','commissions','health'];
     const i = parseInt(e.key) - 1;
-    if (i >= 0 && i < views.length) navigate(views[i]);
+    if (i >= 0 && i < viewList.length) navigate(viewList[i]);
   });
 
 });
