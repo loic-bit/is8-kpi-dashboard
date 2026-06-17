@@ -835,8 +835,11 @@ async function loadData(force = false) {
   setRefreshing(true);
   setHealthDot('loading');
 
-  // UX-03: Show skeleton shimmer on the current view while fetching
-  showSkeletons('view-' + currentView);
+  // Show loading indicator without destroying inner element IDs.
+  // Commissions and other structured views rely on named child elements;
+  // replacing innerHTML would cause renderCommissions to throw on null getElementById calls.
+  const SIMPLE_VIEWS = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','health'];
+  if (SIMPLE_VIEWS.includes(currentView)) showSkeletons('view-' + currentView);
 
   try {
     const f90lead  = "IS_AFTER({Date Added}, DATEADD(TODAY(), -90, 'days'))";
@@ -2731,7 +2734,9 @@ function renderCommissions() {
   const staleData = lastCloseDaysAgo !== null && lastCloseDaysAgo > 14;
 
   const bannerColor = daysUntil <= 3 ? '#ef4444' : daysUntil <= 7 ? '#f59e0b' : '#10b981';
-  document.getElementById('comm-payout-banner').innerHTML = `
+  const commBanner = document.getElementById('comm-payout-banner');
+  if (!commBanner) return;
+  commBanner.innerHTML = `
     <div style="background:#111; border:1px solid ${bannerColor}33; border-radius:10px; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
       <div style="display:flex; align-items:center; gap:10px;">
         <div style="width:8px; height:8px; border-radius:50%; background:${bannerColor};"></div>
@@ -2745,7 +2750,9 @@ function renderCommissions() {
     </div>`;
 
   // ── Rep Payout Table ────────────────────────────────────────────────────
-  document.getElementById('comm-rep-cards').innerHTML = `
+  const commRepCards = document.getElementById('comm-rep-cards');
+  if (!commRepCards) return;
+  commRepCards.innerHTML = `
     <div style="background:#111; border:1px solid #1e1e1e; border-radius:12px; overflow:hidden;">
       <div style="padding:12px 16px 10px; font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.1em; border-bottom:1px solid #1e1e1e;">Rep Payout Summary</div>
       <table id="comm-payout-table" class="data-table"></table>
