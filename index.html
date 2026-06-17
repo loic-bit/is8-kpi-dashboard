@@ -819,6 +819,17 @@ function setHealthDot(status) {
 async function loadData(force = false) {
   if (loading) return;
   if (loaded && !force) return;
+
+  if (!CFG.token) {
+    const errEl = document.getElementById('data-error-banner');
+    if (errEl) {
+      errEl.textContent = 'Airtable token missing — server did not inject it. Contact admin.';
+      errEl.style.display = 'block';
+    }
+    setHealthDot('error');
+    return;
+  }
+
   if (force) Cache.clear();
   loading = true;
   setRefreshing(true);
