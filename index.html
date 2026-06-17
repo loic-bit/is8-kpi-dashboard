@@ -670,9 +670,9 @@
             <th>Lead</th><th>Close Date</th><th class="r">Deal</th>
             <th>Type</th><th>Setter</th><th>Closer</th><th style="text-align:center;">AI</th>
             <th class="r">Setter Comm</th><th class="r">Closer Comm</th><th class="r">Total</th>
-            <th>Pay Period</th><th>Paid Date</th><th>Status</th>
+            <th>Pay Period</th><th>Status</th>
           </tr></thead>
-          <tbody id="comm-tbody"><tr><td colspan="13" style="text-align:center;padding:40px;color:#374151;">Loading...</td></tr></tbody>
+          <tbody id="comm-tbody"><tr><td colspan="12" style="text-align:center;padding:40px;color:#374151;">Loading...</td></tr></tbody>
         </table>
       </div>
       <div id="comm-totals" style="margin-top:12px; padding:14px 16px; background:#111; border:1px solid #1e1e1e; border-radius:10px; display:flex; gap:24px; flex-wrap:wrap;"></div>
@@ -1922,20 +1922,25 @@ function renderRevenue() {
     label: 'Revenue',
   }], { plugins: { legend: { display: false } } });
 
-  // Chart: cumulative revenue for the selected period (BUG-05 — respects rev-range)
+  // Chart: cumulative revenue — extend to full calendar month end so the remaining gap is visible
   const revToday = new Date();
-  const revChartDays = [];
+  const rangeMode = document.getElementById('rev-range').value;
+  const chartEnd = (rangeMode === 'month')
+    ? new Date(revToday.getFullYear(), revToday.getMonth() + 1, 0, 23, 59, 59, 999)
+    : r.e;
+  const allChartDays = [];
   const revCur = new Date(r.s);
-  while (revCur <= revToday && revCur <= r.e) { revChartDays.push(new Date(revCur)); revCur.setDate(revCur.getDate()+1); }
-  // Cap at 180 data points for performance
-  const revDisplay = revChartDays.length > 180 ? revChartDays.filter((_,i) => i % Math.ceil(revChartDays.length/180) === 0) : revChartDays;
+  while (revCur <= chartEnd) { allChartDays.push(new Date(revCur)); revCur.setDate(revCur.getDate() + 1); }
+  const revDisplay = allChartDays.length > 180 ? allChartDays.filter((_,i) => i % Math.ceil(allChartDays.length/180) === 0) : allChartDays;
   const revLabels = revDisplay.map(D.shortLabel);
   let cumRev = 0;
   const cumRevData = revDisplay.map(d => {
+    if (d > revToday) return null;
     const dayRev = payments.filter(c => commDate(c) === D.key(d)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
     cumRev += dayRev; return cumRev;
   });
-  const periodDays = Math.max(1, revChartDays.length);
+  const periodDays = allChartDays.length;
+  const daysElapsed = allChartDays.filter(d => d <= revToday).length;
   const goalPaceLine = revDisplay.map(d => {
     const dayN = Math.max(1, Math.round((d - r.s) / 86400000) + 1);
     return Math.round((CFG.goals.monthlyRev / periodDays) * dayN);
@@ -1948,7 +1953,6 @@ function renderRevenue() {
 
   // Revenue insights
   const revInsights = [];
-  const daysElapsed = revChartDays.length;
   if (total > 0 && daysElapsed > 0) {
     const pace = (total / daysElapsed) * periodDays;
     const gap  = pace - CFG.goals.monthlyRev;
@@ -2815,14 +2819,13 @@ function renderCommissions() {
       <td class="r comm-c-cell" style="color:${(isDeposit||isRefunded)?'#6b7280':'#a78bfa'}; font-size:12px; white-space:nowrap;">${(isDeposit||isRefunded)?'—':(comm.cPct>0?comm.cPct+'% / '+F.$(comm.cAmt):'—')}</td>
       <td class="r comm-t-cell" style="font-weight:700; color:${commColor}; font-size:14px; white-space:nowrap;">${commLabel}</td>
       <td style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Pay Period']||'—'}</td>
-      <td class="comm-paid-date" style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Paid Date']||'—'}</td>
       <td>
         <select class="comm-sel" data-field="Status" style="max-width:90px; border-color:${glow.accent}; color:${glow.accent}; font-weight:600;">
           ${selOpts(isDeposit ? DEPOSIT_STATUS_OPTS : STATUS_OPTS, status)}
         </select>
       </td>
     </tr>`;
-  }).join('') || `<tr><td colspan="13" style="text-align:center;padding:40px;color:#374151;">No deals match filters.</td></tr>`;
+  }).join('') || `<tr><td colspan="12" style="text-align:center;padding:40px;color:#374151;">No deals match filters.</td></tr>`;
 
   const tbodyEl = document.getElementById('comm-tbody');
   tbodyEl.innerHTML = tbody;
@@ -2847,7 +2850,6 @@ function renderCommissions() {
         'Total Comm':    comm.total,
         'Status':        f['Status'] || 'Pending',
         'Pay Period':    f['Pay Period'] || '',
-        'Paid Date':     f['Paid Date'] || '',
         'Whop ID':       f['Whop Payment ID'] || '',
       }));
       downloadCSV(rows, `commissions-${new Date().toISOString().slice(0,10)}.csv`);
@@ -2887,7 +2889,6 @@ function renderCommissions() {
       const isDeposit  = (rec.fields['Payment Type'] || 'Full Payment') === 'Deposit';
       const isRefunded = (rec.fields['Status'] || '') === 'Refunded';
 
-      // Declare patchFields here so the Status block below can add Paid Date to it
       const patchFields = { [field]: value };
 
       // Update commission cells in this row
@@ -2943,14 +2944,6 @@ function renderCommissions() {
         el.style.borderColor = g.accent;
         el.style.color = g.accent;
 
-        // Auto-stamp Paid Date when status moves to Paid
-        if (value === 'Paid' && !rec.fields['Paid Date']) {
-          const todayStr = new Date().toISOString().split('T')[0];
-          rec.fields['Paid Date'] = todayStr;
-          const paidDateCell = tr.querySelector('.comm-paid-date');
-          if (paidDateCell) paidDateCell.textContent = todayStr;
-          patchFields['Paid Date'] = todayStr;
-        }
       }
 
       // Include updated commission amounts when setter/closer/AI changes (not on refunded)
