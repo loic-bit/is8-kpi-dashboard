@@ -835,11 +835,9 @@ async function loadData(force = false) {
   setRefreshing(true);
   setHealthDot('loading');
 
-  // Show loading indicator without destroying inner element IDs.
-  // Commissions and other structured views rely on named child elements;
-  // replacing innerHTML would cause renderCommissions to throw on null getElementById calls.
-  const SIMPLE_VIEWS = ['scorecard','calls','meta','optins','dials','revenue','leaderboard','health'];
-  if (SIMPLE_VIEWS.includes(currentView)) showSkeletons('view-' + currentView);
+  // Do not call showSkeletons — every view uses getElementById on inner elements
+  // that would be destroyed by innerHTML replacement. The global refresh spinner
+  // (setRefreshing + setHealthDot) is sufficient loading feedback.
 
   try {
     const f90lead  = "IS_AFTER({Date Added}, DATEADD(TODAY(), -90, 'days'))";
