@@ -248,8 +248,9 @@
       <!-- Decision alert -->
       <div id="sc-alert" style="margin-bottom:16px;"></div>
 
-      <!-- Hero 3: Show Rate / Close Rate / COPC -->
-      <div id="sc-hero" style="display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:16px;">
+      <!-- Hero 3: Show Rate / Close Rate / True Close Rate / COPC -->
+      <div id="sc-hero" style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:16px;">
+        <div class="skeleton" style="height:150px;"></div>
         <div class="skeleton" style="height:150px;"></div>
         <div class="skeleton" style="height:150px;"></div>
         <div class="skeleton" style="height:150px;"></div>
@@ -1288,8 +1289,27 @@ function renderScorecard() {
   const closesP = showRecordsP.filter(c => everPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
   // Also count period revenue from shows with no email match (DM closes / untracked calls)
   const periodPays = new Set(commInPeriod.map(c => fv(c,'Lead Email')||c.id));
-  const showEmails = new Set(showRecords.map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean));
-  const unmatchedCloses = commInPeriod.filter(c => !showEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+  const showEmails  = new Set(showRecords.map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean));
+  const showEmailsP = new Set(showRecordsP.map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean));
+  const unmatchedCloses  = commInPeriod.filter(c => !showEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+  const unmatchedClosesP = commInPeriodP.filter(c => !showEmailsP.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+
+  // ── True Close Rate: all-source breakdown ──
+  // Splits shows by call type (Intro vs Follow-Up/2nd call) to show WHERE closes happen.
+  // Then adds DM closes as a separate pipeline segment to get the full-funnel picture.
+  const introShows      = showRecords.filter(c => fv(c,'Call Type') !== 'Follow Up');
+  const followUpShows   = showRecords.filter(c => fv(c,'Call Type') === 'Follow Up');
+  const introCloses     = introShows.filter(c => everPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+  const followUpCloses  = followUpShows.filter(c => everPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+  const introCloseRate    = introShows.length > 0 ? introCloses / introShows.length : null;
+  const followUpCloseRate = followUpShows.length > 0 ? followUpCloses / followUpShows.length : null;
+  // All-source: call closes + DM closes / (shows + DM closes as their own pipeline)
+  const totalCloses     = closes + unmatchedCloses;
+  const totalClosesP    = closesP + unmatchedClosesP;
+  const adjDenom        = shows + unmatchedCloses;
+  const adjDenomP       = showsP + unmatchedClosesP;
+  const trueCloseRate   = adjDenom > 0 ? totalCloses / adjDenom : 0;
+  const trueCloseRateP  = adjDenomP > 0 ? totalClosesP / adjDenomP : 0;
 
   const showRate   = pastCalls.length > 0 ? shows / pastCalls.length : 0;
   const showRateP  = pastCallsP.length > 0 ? showsP / pastCallsP.length : 0;
@@ -1312,20 +1332,25 @@ function renderScorecard() {
   const alertEl = document.getElementById('sc-alert');
   if (alertEl && shows >= 1) {
     let alertHTML = '';
-    const showOk  = showRate >= CFG.goals.showRate;
-    const closeOk = closeRate >= CFG.goals.closeRate;
-    if (!showOk && !closeOk) {
+    const showOk      = showRate >= CFG.goals.showRate;
+    const closeOk     = closeRate >= CFG.goals.closeRate;
+    const trueCloseOk = trueCloseRate >= 0.35;
+    if (!showOk && !closeOk && !trueCloseOk) {
       alertHTML = `<div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.25); border-radius:10px; padding:14px 18px; display:flex; gap:12px; align-items:center;">
         <span style="font-size:18px;">🚨</span>
-        <div><strong style="color:#f87171;">Both show rate and close rate are below goal.</strong> <span style="color:#9ca3af; font-size:13px;">Do not increase ad spend. Fix nurture + closing first.</span></div></div>`;
-    } else if (!showOk && closeOk) {
+        <div><strong style="color:#f87171;">Show rate and close rate are both below goal.</strong> <span style="color:#9ca3af; font-size:13px;">Do not increase ad spend. Fix nurture + closing first.</span></div></div>`;
+    } else if (!showOk && (closeOk || trueCloseOk)) {
       alertHTML = `<div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25); border-radius:10px; padding:14px 18px; display:flex; gap:12px; align-items:center;">
         <span style="font-size:18px;">⚠️</span>
-        <div><strong style="color:#fbbf24;">Show rate is low — this is a nurture/booking problem.</strong> <span style="color:#9ca3af; font-size:13px;">Closers are not the issue. Focus on follow-up and confirmation sequences.</span></div></div>`;
-    } else if (showOk && !closeOk) {
+        <div><strong style="color:#fbbf24;">Show rate is low — nurture and booking problem.</strong> <span style="color:#9ca3af; font-size:13px;">Closers are converting when people show. Focus on confirmation sequences and pre-call follow-up.</span></div></div>`;
+    } else if (showOk && !closeOk && !trueCloseOk) {
       alertHTML = `<div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25); border-radius:10px; padding:14px 18px; display:flex; gap:12px; align-items:center;">
         <span style="font-size:18px;">⚠️</span>
-        <div><strong style="color:#fbbf24;">Close rate is below goal — leads are showing but not buying.</strong> <span style="color:#9ca3af; font-size:13px;">Check closer performance or lead quality. Do not scale spend until this resolves.</span></div></div>`;
+        <div><strong style="color:#fbbf24;">Leads are showing but not buying — closing problem.</strong> <span style="color:#9ca3af; font-size:13px;">True close rate (${F.pct(trueCloseRate)}) is also below 35%. Check closer performance, offer framing, or lead quality.</span></div></div>`;
+    } else if (showOk && !closeOk && trueCloseOk) {
+      alertHTML = `<div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25); border-radius:10px; padding:14px 18px; display:flex; gap:12px; align-items:center;">
+        <span style="font-size:18px;">💬</span>
+        <div><strong style="color:#fbbf24;">Most closes are happening off-call (DMs / follow-ups).</strong> <span style="color:#9ca3af; font-size:13px;">True close rate (${F.pct(trueCloseRate)}) is healthy. Consider adding a post-call DM sequence to systematize these closes.</span></div></div>`;
     } else {
       alertHTML = `<div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2); border-radius:10px; padding:14px 18px; display:flex; gap:12px; align-items:center;">
         <span style="font-size:18px;">✅</span>
@@ -1342,11 +1367,22 @@ function renderScorecard() {
       sub: `${shows} shows from ${pastCalls.length} past calls (${booked} total booked) · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · <span id="missing-outcome-link" style="cursor:pointer;color:#fbbf24;text-decoration:underline;" onclick="openDispositionModal()">&#9888; ${noDataCalls} calls missing outcome</span>` : ''),
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
-    heroCard({ label: 'Close Rate', value: F.pct(closeRate),
-      sub: `${closes} of ${shows} shows paid · Goal: ${F.pct(CFG.goals.closeRate)}`
-        + (unmatchedCloses > 0 ? ` · <span style="color:#f59e0b;">${unmatchedCloses} DM/direct close${unmatchedCloses>1?'s':''} (no tracked call)</span>` : ''),
+    heroCard({ label: 'Close Rate (Calls)', value: F.pct(closeRate),
+      sub: `${closes} of ${shows} call shows paid · Goal: ${F.pct(CFG.goals.closeRate)}`
+        + (unmatchedCloses > 0 ? ` · <span style="color:#f59e0b;">${unmatchedCloses} DM close${unmatchedCloses>1?'s':''} not counted</span>` : ''),
       trend: trendBadge(closeRate, closeRateP, false, v => F.pct(v)),
       goodIf: closeRate, warnBelow: CFG.goals.closeRate }),
+    heroCard({ label: 'True Close Rate', value: F.pct(trueCloseRate),
+      sub: (() => {
+        const parts = [`${totalCloses} total (${closes} calls + ${unmatchedCloses} DMs) · ${adjDenom} engaged leads`];
+        const breakdown = [];
+        if (introCloseRate !== null) breakdown.push(`Intro: ${F.pct(introCloseRate)} (${introCloses}/${introShows.length})`);
+        if (followUpCloseRate !== null) breakdown.push(`2nd call: ${F.pct(followUpCloseRate)} (${followUpCloses}/${followUpShows.length})`);
+        if (breakdown.length) parts.push(breakdown.join(' · '));
+        return parts.join('<br>');
+      })(),
+      trend: trendBadge(trueCloseRate, trueCloseRateP, false, v => F.pct(v)),
+      goodIf: trueCloseRate, warnBelow: 0.35 }),
     heroCard({ label: 'COPC', value: F.$(Math.round(copc)),
       sub: `Cash per showed call · ${shows} shows · ${F.$(Math.round(revP/Math.max(showsP,1)))} prior period`,
       trend: trendBadge(copc, copcP, false, v => F.$(Math.round(v))),
