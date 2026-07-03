@@ -1582,9 +1582,15 @@ function renderCalls() {
     .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r))
     .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
+  // commClosesCount (all closes in period from commissions) is computed with the leaderboard below;
+  // hoist the count here so the KPI cards use the true close count, not just on-call closes.
+  const periodCloseCount = DB.commissions.filter(c =>
+    (fv(c,'Whop Payment ID')||'').length > 0 &&
+    (fv(c,'Payment Type')||'Full Payment') !== 'Deposit' &&
+    D.in(fv(c,'Close Date'), r)).length;
   const showRate  = pastCalls.length ? shows / pastCalls.length : 0;
   const closeRate = Math.min(shows ? closes / shows : 0, 1);
-  const avgDeal   = closes > 0 && rev > 0 ? rev / closes : 0;
+  const avgDeal   = periodCloseCount > 0 && rev > 0 ? rev / periodCloseCount : 0;
 
   // Range label
   const callsLbl = document.getElementById('calls-range-label');
@@ -1609,43 +1615,59 @@ function renderCalls() {
     kpiCardTrend({ label:'Close Rate',   value: F.pct(closeRate), trend: trendBadge(closeRate, prevCloseRate, false, v=>F.pct(v)), accent: closeRate >= CFG.goals.closeRate ? '#10b981' : '#ef4444',
       goalPct: closeRate / CFG.goals.closeRate, goalLabel: `Goal: ${F.pct(CFG.goals.closeRate)}` }),
     kpiCardTrend({ label:'Revenue',      value: F.$(rev),         trend: trendBadge(rev, prevRev, false, v=>F.$(Math.round(v))),  accent:'#f59e0b' }),
-    kpiCardTrend({ label:'Avg Deal Size',value: closes > 0 && rev > 0 ? F.$(Math.round(rev/closes)) : '—', accent:'#a78bfa' }),
+    kpiCardTrend({ label:'Avg Deal Size',value: avgDeal > 0 ? F.$(Math.round(avgDeal)) : '—', accent:'#a78bfa' }),
   ].join('');
 
-  // ── Closer leaderboard (BUG-01: use Whop-payment close signal, same as Scorecard) ──
-  const closerStats = {};
+  // ── Closer / Setter leaderboards ──
+  // Closes + Revenue come from the commissions SOURCE OF TRUTH (by Closer/Setter field, Close Date
+  // in range) — same as the Leaderboard view and Commission Tracker. Most deals close off-call
+  // (DM / follow-up), so call-attribution alone badly undercounts a closer (e.g. Alen: 14 deals /
+  // $35,975 in commissions vs 1 call-matched close). Shows / No-Shows / Booked still come from calls.
+  const rangeComms = DB.commissions.filter(c =>
+    (fv(c,'Whop Payment ID')||'').length > 0 &&
+    (fv(c,'Payment Type')||'Full Payment') !== 'Deposit' &&
+    D.in(fv(c,'Close Date'), r));
+  const commByCloser = {}, commBySetter = {};
+  rangeComms.forEach(c => {
+    const amt = fv(c,'Deal Amount')||0;
+    const cl = fv(c,'Closer'); if (cl) { if (!commByCloser[cl]) commByCloser[cl] = { closes:0, rev:0 }; commByCloser[cl].closes++; commByCloser[cl].rev += amt; }
+    const st = fv(c,'Setter'); if (st) { if (!commBySetter[st]) commBySetter[st] = { closes:0, rev:0 }; commBySetter[st].closes++; commBySetter[st].rev += amt; }
+  });
+
   const allCallsInRange = DB.calls.filter(c => D.in(fv(c,'Call Date'), r));
+  const closerStats = {};
+  const ensureCloser = k => { if (!closerStats[k]) closerStats[k] = { shows:0, closes:0, rev:0, noShows:0 }; return closerStats[k]; };
   allCallsInRange.forEach(c => {
     const cl = fv(c,'Closer') || (isShow(c) ? 'Unattributed' : null);
     if (!cl) return;
-    if (!closerStats[cl]) closerStats[cl] = { shows:0, closes:0, rev:0, noShows:0 };
-    if (isShow(c))                              closerStats[cl].shows++;
-    if (isShow(c) && callIsClosed(c))         { closerStats[cl].closes++; closerStats[cl].rev += callRev(c); }
-    if (fv(c,'Outcome')==='No-Show')            closerStats[cl].noShows++;
+    const s = ensureCloser(cl);
+    if (isShow(c))                   s.shows++;
+    if (fv(c,'Outcome')==='No-Show') s.noShows++;
   });
+  Object.entries(commByCloser).forEach(([cl, d]) => { const s = ensureCloser(cl); s.closes = d.closes; s.rev = d.rev; });
   const closerRows = Object.entries(closerStats)
     .sort((a,b) => b[1].rev - a[1].rev)
     .map(([name, d]) => [
       name,
       d.shows,
       d.closes,
-      d.shows > 0 ? F.pct(d.closes/d.shows) : '—',
+      d.shows > 0 ? F.pct(Math.min(d.closes/d.shows, 1)) : (d.closes > 0 ? 'off-call' : '—'),
       F.$(d.rev),
-      d.shows > 0 ? F.$(Math.round(d.rev / d.shows)) : '—',   // COPC
+      d.shows > 0 ? F.$(Math.round(d.rev / d.shows)) : '—',   // COPC (cash per showed call)
       d.noShows,
     ]);
 
   const setterStats = {};
+  const ensureSetter = k => { if (!setterStats[k]) setterStats[k] = { booked:0, shows:0, closes:0, rev:0 }; return setterStats[k]; };
   allCallsInRange.forEach(c => {
-    const s = fv(c,'Setter');
-    if (!s) return;
-    if (!setterStats[s]) setterStats[s] = { booked:0, shows:0, closes:0, rev:0 };
-    setterStats[s].booked++;
-    if (isShow(c))        setterStats[s].shows++;
-    if (isShow(c) && callIsClosed(c)) { setterStats[s].closes++; setterStats[s].rev += callRev(c); }
+    const st = fv(c,'Setter'); if (!st) return;
+    const s = ensureSetter(st);
+    s.booked++;
+    if (isShow(c)) s.shows++;
   });
+  Object.entries(commBySetter).forEach(([st, d]) => { const s = ensureSetter(st); s.closes = d.closes; s.rev = d.rev; });
   const setterRows = Object.entries(setterStats)
-    .sort((a,b) => b[1].booked - a[1].booked)
+    .sort((a,b) => b[1].rev - a[1].rev || b[1].booked - a[1].booked)
     .map(([name, d]) => [
       name,
       d.booked,
