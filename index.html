@@ -50,6 +50,22 @@
       #main { margin-left: 0 !important; }
     }
 
+    /* F11: KPI card grids set their columns inline — override responsively so cards
+       don't get cut off / squished on tablet and phone. */
+    @media (max-width: 1180px) {
+      #sc-hero, #sc-econ, #calls-kpis, #meta-summary, #dials-summary, #rev-kpis, #optins-kpis {
+        grid-template-columns: repeat(2, 1fr) !important;
+      }
+    }
+    @media (max-width: 560px) {
+      #sc-hero, #sc-econ, #calls-kpis, #meta-summary, #dials-summary, #rev-kpis, #optins-kpis {
+        grid-template-columns: 1fr !important;
+      }
+      /* top padding clears the fixed hamburger button (top:12px + 38px) */
+      #view-scorecard, #view-calls, #view-meta, #view-optins, #view-dials,
+      #view-revenue, #view-leaderboard, #view-commissions, #view-health { padding: 60px 16px 20px !important; }
+    }
+
     .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 8px; cursor: pointer; transition: all 0.12s ease; color: #6b7280; font-size: 13.5px; font-weight: 500; border-left: 2px solid transparent; }
     .nav-item:hover { background: #1a1a1a; color: #d1d5db; }
     .nav-item.active { background: #1a1a1a; color: #fff; border-left-color: #f59e0b; }
@@ -323,6 +339,7 @@
           <option value="Intro Call">Intro Call</option>
           <option value="Roadmap Session">Roadmap Session</option>
         </select>
+        <input id="calls-search" type="text" placeholder="Search lead..." class="filter-select" style="width:150px;">
       </div>
       <!-- KPI cards -->
       <div id="calls-kpis" style="display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:16px;">
@@ -597,7 +614,7 @@
 
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
         <div class="kpi-card">
-          <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Revenue by Product</p>
+          <p style="font-size:12px; color:#6b7280; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:16px;">Revenue by Closer</p>
           <canvas id="chart-rev-product" height="220"></canvas>
         </div>
         <div class="kpi-card">
@@ -659,6 +676,7 @@
             <option value="">All Statuses</option>
             <option>Pending</option><option>Approved</option><option>Paid</option><option>Refunded</option>
           </select>
+          <input id="comm-search" type="text" placeholder="Search lead..." class="filter-select" style="width:150px;">
           <span id="comm-count" style="font-size:11px;color:#4b5563;margin-left:4px;"></span>
           <button id="comm-export-btn" style="background:#1a1a1a;border:1px solid #222;color:#9ca3af;font-size:11px;font-weight:500;padding:5px 12px;border-radius:6px;cursor:pointer;font-family:Inter;margin-left:auto;">Export CSV</button>
         </div>
@@ -1003,7 +1021,8 @@ function trendBadge(curr, prev, lowerIsBetter = false, fmt = null) {
 }
 
 // KPI card with trend support
-function kpiCardTrend({ label, value, sub = '', accent = false, goalPct = null, goalLabel = '', trend = '' }) {
+function kpiCardTrend({ label, value, sub = '', accent = false, goalPct = null, goalLabel = '', trend = '', tip = '' }) {
+  const tipIcon = tip ? `<span title="${tip}" style="cursor:help;color:#4b5563;font-size:11px;margin-left:4px;">&#9432;</span>` : '';
   const bar = goalPct !== null ? (() => {
     const pct = Math.min(Math.max(goalPct, 0), 1);
     const col = pct >= 1 ? '#10b981' : pct >= 0.7 ? '#f59e0b' : '#ef4444';
@@ -1014,10 +1033,12 @@ function kpiCardTrend({ label, value, sub = '', accent = false, goalPct = null, 
       <div class="goal-track"><div class="goal-fill" style="width:${pct*100}%; background:${col};"></div></div>
     </div>`;
   })() : '';
+  // accent may be a boolean (amber) or an explicit color string (e.g. '#60a5fa')
+  const numColor = typeof accent === 'string' ? accent : (accent ? '#f59e0b' : '#fff');
   return `<div class="kpi-card">
     <div style="font-size:10.5px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:8px;">${label}</div>
     <div style="display:flex; align-items:baseline; gap:4px;">
-      <span style="font-size:26px; font-weight:700; color:${accent ? '#f59e0b' : '#fff'}; line-height:1;">${value}</span>
+      <span style="font-size:26px; font-weight:700; color:${numColor}; line-height:1;">${value}</span>
       ${trend}
     </div>
     ${sub ? `<div style="font-size:11.5px; color:#4b5563; margin-top:5px;">${sub}</div>` : ''}
@@ -1183,9 +1204,11 @@ function downloadCSV(rows, filename) {
   const escape = v => JSON.stringify(v == null ? '' : String(v));
   const csv = [headers.map(escape).join(','), ...rows.map(r => headers.map(h => escape(r[h])).join(','))].join('\n');
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.href = url;
   a.download = filename;
   a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000); // F15: release the blob URL
 }
 
 // Unified Airtable PATCH (replaces patchCall + patchCommission)
@@ -1227,21 +1250,25 @@ function fmtRangeLabel(r) {
 // ═══════════════════════════════════════════════════════════
 // VIEW: SCORECARD
 // ═══════════════════════════════════════════════════════════
-function heroCard({ label, value, sub, trend, goodIf, warnBelow, accent }) {
+function heroCard({ label, value, sub, trend, goodIf, warnBelow, accent, lowConf = false }) {
   // goodIf: numeric value to compare vs threshold
   // warnBelow: threshold — red if below, green if above
+  // lowConf: sample too small to trust — render neutral, suppress good/bad coloring + trend
   let borderColor = '#272727', numColor = '#fff';
-  if (warnBelow != null && goodIf != null) {
+  if (lowConf) {
+    numColor = '#9ca3af';
+  } else if (warnBelow != null && goodIf != null) {
     numColor = goodIf >= warnBelow ? '#10b981' : '#ef4444';
     borderColor = goodIf >= warnBelow ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)';
   } else if (accent) {
     numColor = '#f59e0b';
   }
+  const lowBadge = lowConf ? `<span title="Not enough dispositioned calls yet to trust this rate" style="font-size:9.5px; font-weight:600; color:#6b7280; background:#1a1a1a; border:1px solid #272727; border-radius:5px; padding:1px 6px; margin-left:6px; vertical-align:middle; letter-spacing:0.02em;">BUILDING</span>` : '';
   return `<div class="kpi-card" style="border-color:${borderColor}; padding:22px 24px;">
-    <div style="font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:12px;">${label}</div>
+    <div style="font-size:11px; font-weight:700; color:#6b7280; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:12px;">${label}${lowBadge}</div>
     <div style="display:flex; align-items:baseline; gap:6px; margin-bottom:6px;">
       <span style="font-size:42px; font-weight:800; color:${numColor}; line-height:1; letter-spacing:-1px;">${value}</span>
-      ${trend || ''}
+      ${lowConf ? '' : (trend || '')}
     </div>
     ${sub ? `<div style="font-size:12px; color:#4b5563;">${sub}</div>` : ''}
   </div>`;
@@ -1267,9 +1294,19 @@ function renderScorecard() {
   const todayStr = new Date().toISOString().split('T')[0];
   const pastCalls  = calls.filter(c => (fv(c,'Call Date') || '') <= todayStr);
   const pastCallsP = callsP.filter(c => (fv(c,'Call Date') || '') <= todayStr);
-  const shows   = pastCalls.filter(c => isShow(c)).length;
-  const showsP  = pastCallsP.filter(c => isShow(c)).length;
+  // F1: a call only counts toward show rate once it has a Show flag or an Outcome.
+  // Undispositioned past calls must be EXCLUDED from the denominator, not treated as no-shows —
+  // otherwise early-month backlog crushes the rate to 0%.
+  const isDispositioned = c => fv(c,'Show') != null || (fv(c,'Outcome') || '') !== '';
+  const dispCalls  = pastCalls.filter(isDispositioned);
+  const dispCallsP = pastCallsP.filter(isDispositioned);
+  const shows   = dispCalls.filter(c => isShow(c)).length;
+  const showsP  = dispCallsP.filter(c => isShow(c)).length;
   const noDataCalls = pastCalls.filter(c => fv(c,'Show') == null && !fv(c,'Outcome')).length;
+  // F1: sample-size confidence — below this, show a neutral "building" state instead of a scary 0%/100%.
+  const MIN_SAMPLE = 5;
+  const showConf  = dispCalls.length >= MIN_SAMPLE;
+  const closeConf = shows >= MIN_SAMPLE;
   // Revenue: Whop payments whose Close Date falls in this period
   const commInPeriod  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r));
   const commInPeriodP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), rp));
@@ -1311,8 +1348,8 @@ function renderScorecard() {
   const trueCloseRate   = adjDenom > 0 ? totalCloses / adjDenom : 0;
   const trueCloseRateP  = adjDenomP > 0 ? totalClosesP / adjDenomP : 0;
 
-  const showRate   = pastCalls.length > 0 ? shows / pastCalls.length : 0;
-  const showRateP  = pastCallsP.length > 0 ? showsP / pastCallsP.length : 0;
+  const showRate   = dispCalls.length > 0 ? shows / dispCalls.length : 0;
+  const showRateP  = dispCallsP.length > 0 ? showsP / dispCallsP.length : 0;
   const closeRate  = shows > 0 ? closes / shows : 0;
   const closeRateP = showsP > 0 ? closesP / showsP : 0;
   const copc       = shows > 0 ? rev / shows : 0;
@@ -1363,16 +1400,16 @@ function renderScorecard() {
 
   // ── Hero cards ──
   document.getElementById('sc-hero').innerHTML = [
-    heroCard({ label: 'Show Rate', value: F.pct(showRate),
-      sub: `${shows} shows from ${pastCalls.length} past calls (${booked} total booked) · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · <span id="missing-outcome-link" style="cursor:pointer;color:#fbbf24;text-decoration:underline;" onclick="openDispositionModal()">&#9888; ${noDataCalls} calls missing outcome</span>` : ''),
+    heroCard({ label: 'Show Rate', value: showConf ? F.pct(showRate) : (dispCalls.length ? F.pct(showRate) : '—'), lowConf: !showConf,
+      sub: `${shows} shows from ${dispCalls.length} dispositioned call${dispCalls.length!==1?'s':''} (${booked} booked) · Goal: ${F.pct(CFG.goals.showRate)}` + (noDataCalls > 0 ? ` · <span id="missing-outcome-link" style="cursor:pointer;color:#fbbf24;text-decoration:underline;" onclick="openDispositionModal()">&#9888; ${noDataCalls} awaiting outcome</span>` : ''),
       trend: trendBadge(showRate, showRateP, false, v => F.pct(v)),
       goodIf: showRate, warnBelow: CFG.goals.showRate }),
-    heroCard({ label: 'Close Rate (Calls)', value: F.pct(closeRate),
+    heroCard({ label: 'Close Rate (Calls)', value: closeConf ? F.pct(closeRate) : (shows ? F.pct(closeRate) : '—'), lowConf: !closeConf,
       sub: `${closes} of ${shows} call shows paid · Goal: ${F.pct(CFG.goals.closeRate)}`
         + (unmatchedCloses > 0 ? ` · <span style="color:#f59e0b;">${unmatchedCloses} DM close${unmatchedCloses>1?'s':''} not counted</span>` : ''),
       trend: trendBadge(closeRate, closeRateP, false, v => F.pct(v)),
       goodIf: closeRate, warnBelow: CFG.goals.closeRate }),
-    heroCard({ label: 'True Close Rate', value: F.pct(trueCloseRate),
+    heroCard({ label: 'True Close Rate', value: closeConf ? F.pct(trueCloseRate) : (adjDenom ? F.pct(trueCloseRate) : '—'), lowConf: !closeConf,
       sub: (() => {
         const parts = [`${totalCloses} total (${closes} calls + ${unmatchedCloses} DMs) · ${adjDenom} engaged leads`];
         const breakdown = [];
@@ -1409,14 +1446,16 @@ function renderScorecard() {
   // ── Full funnel ──
   const funnelEl = document.getElementById('sc-funnel');
   if (funnelEl) {
+    // F2: "Closes" reflects ALL closes (call-matched + off-call/DM) so it reconciles with Cash.
+    // Otherwise the funnel reads "0 closes" next to real cash collected, which looks like a bug.
     const steps = [
-      { label: 'Total Opt-ins',  n: optins,  conv: optins > 0 ? booked/optins : null,   convLabel: 'booked' },
-      { label: 'Calls Booked',   n: booked,  conv: booked > 0 ? shows/booked : null,    convLabel: 'showed' },
-      { label: 'Shows',          n: shows,   conv: shows > 0  ? closes/shows : null,    convLabel: 'closed' },
-      { label: 'Closes',         n: closes,  conv: null,                                convLabel: '' },
-      { label: 'Cash Collected', n: null,    value: F.$(rev), conv: null,               convLabel: '' },
+      { label: 'Total Opt-ins',  n: optins,      conv: optins > 0 ? booked/optins : null, convLabel: 'booked' },
+      { label: 'Calls Booked',   n: booked,      conv: booked > 0 ? shows/booked : null,  convLabel: 'showed' },
+      { label: 'Shows',          n: shows,       conv: shows > 0  ? closes/shows : null,  convLabel: 'closed' },
+      { label: 'Closes',         n: totalCloses, conv: null,   note: unmatchedCloses > 0 ? `${closes} call + ${unmatchedCloses} off-call` : '', convLabel: '' },
+      { label: 'Cash Collected', n: null,        value: F.$(rev), conv: null,             convLabel: '' },
     ];
-    const maxN = Math.max(optins, booked, shows, closes, 1);
+    const maxN = Math.max(optins, booked, shows, totalCloses, 1);
     funnelEl.innerHTML = `<div style="display:flex; gap:0; align-items:flex-end;">` +
       steps.map((s, i) => {
         const n = s.n ?? 0;
@@ -1427,7 +1466,7 @@ function renderScorecard() {
           <div style="font-size:${s.n != null ? '22px' : '18px'}; font-weight:700; color:#fff; margin-bottom:4px;">${s.n != null ? s.n : s.value}</div>
           <div style="width:100%; height:${h}px; background:${colors[i]}; border-radius:4px 4px 0 0; opacity:${0.85 + i*0.03}; transition:height 0.4s;"></div>
           <div style="font-size:11px; color:#6b7280; margin-top:8px; font-weight:500; text-align:center;">${s.label}</div>
-          ${s.conv != null ? `<div style="font-size:10px; color:#4b5563; margin-top:2px;">${F.pct(s.conv)} ${s.convLabel}</div>` : '<div style="height:14px;"></div>'}
+          ${s.conv != null ? `<div style="font-size:10px; color:#4b5563; margin-top:2px;">${F.pct(s.conv)} ${s.convLabel}</div>` : (s.note ? `<div style="font-size:9.5px; color:#4b5563; margin-top:2px;">${s.note}</div>` : '<div style="height:14px;"></div>')}
           ${!isLast ? '' : ''}
         </div>${!isLast ? `<div style="width:20px; display:flex; align-items:center; justify-content:center; padding-bottom:${h/2+10}px; color:#374151; font-size:14px;">›</div>` : ''}`;
       }).join('') + `</div>`;
@@ -1448,7 +1487,8 @@ function renderScorecard() {
     const cl = fv(c,'Closer'); if (!cl) return;
     if (!closerMap[cl]) closerMap[cl] = { shows:0, closes:0, rev:0 };
     if (isShow(c)) closerMap[cl].shows++;
-    if (fv(c,'Outcome')==='Closed') { closerMap[cl].closes++; closerMap[cl].rev += fv(c,'Cash Collected')||0; }
+    // F6: use the same Whop-paid close signal as the rest of the scorecard, not raw GHL Outcome
+    if (isShow(c) && everPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase())) closerMap[cl].closes++;
   });
   const closerList = Object.entries(closerMap).filter(([,v])=>v.shows>0);
   if (closerList.length > 1) {
@@ -1498,15 +1538,21 @@ function renderCalls() {
   const outcome = document.getElementById('calls-outcome').value;
   const type    = document.getElementById('calls-type').value;
 
+  const search  = (document.getElementById('calls-search')?.value || '').toLowerCase().trim();
+
   let calls = DB.calls.filter(c => D.in(fv(c,'Call Date'), r));
   if (closer)  calls = calls.filter(c => fv(c,'Closer') === closer);
   if (outcome) calls = calls.filter(c => fv(c,'Outcome') === outcome);
   if (type)    calls = calls.filter(c => fv(c,'Call Type') === type);
+  if (search)  calls = calls.filter(c => (fv(c,'Lead Name')||'').toLowerCase().includes(search));
   calls.sort((a,b) => new Date(fv(b,'Call Date')) - new Date(fv(a,'Call Date')));
 
-  // BUG-03: exclude future calls from show rate
+  // BUG-03: exclude future calls from show rate.
+  // F1: also exclude undispositioned past calls from the denominator (Show flag or Outcome present),
+  // so a disposition backlog doesn't crush the rate toward 0% — matches the Scorecard.
   const todayStr = new Date().toISOString().split('T')[0];
-  const pastCalls = calls.filter(c => (fv(c,'Call Date') || '') <= todayStr);
+  const isDispositioned = c => fv(c,'Show') != null || (fv(c,'Outcome') || '') !== '';
+  const pastCalls = calls.filter(c => (fv(c,'Call Date') || '') <= todayStr && isDispositioned(c));
   const shows  = pastCalls.filter(c => isShow(c)).length;
 
   // Use Whop payments as close signal (same source as Scorecard) — GHL Outcome='Closed' is
@@ -1519,6 +1565,17 @@ function renderCalls() {
   const callIsClosed = c => fv(c,'Outcome') === 'Closed'
     || commPaidEmails.has((fv(c,'Lead Email')||'').toLowerCase());
   const closes = calls.filter(c => isShow(c) && callIsClosed(c)).length;
+
+  // F4: attribute closer/setter revenue from the commissions source of truth (matched by email),
+  // NOT the calls "Cash Collected" field which is only populated on ~26% of call records.
+  const commRevByEmail = {};
+  DB.commissions
+    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && D.in(commDate(c), r))
+    .forEach(c => {
+      const em = (fv(c,'Lead Email')||'').toLowerCase();
+      if (em) commRevByEmail[em] = (commRevByEmail[em]||0) + (fv(c,'Deal Amount')||0);
+    });
+  const callRev = c => commRevByEmail[(fv(c,'Lead Email')||'').toLowerCase()] || 0;
 
   // Revenue from commissions matched to calls in this period
   const rev = DB.commissions
@@ -1536,7 +1593,7 @@ function renderCalls() {
   // prev period for trends
   const pr = prevRange(document.getElementById('calls-range').value);
   const prevCalls  = DB.calls.filter(c => D.in(fv(c,'Call Date'), pr));
-  const prevPastCalls = prevCalls.filter(c => (fv(c,'Call Date') || '') <= todayStr);
+  const prevPastCalls = prevCalls.filter(c => (fv(c,'Call Date') || '') <= todayStr && isDispositioned(c));
   const prevShows  = prevPastCalls.filter(c => isShow(c)).length;
   const prevCloses = prevPastCalls.filter(c => isShow(c) && callIsClosed(c)).length;
   const prevShowRate  = prevPastCalls.length ? prevShows / prevPastCalls.length : 0;
@@ -1563,7 +1620,7 @@ function renderCalls() {
     if (!cl) return;
     if (!closerStats[cl]) closerStats[cl] = { shows:0, closes:0, rev:0, noShows:0 };
     if (isShow(c))                              closerStats[cl].shows++;
-    if (isShow(c) && callIsClosed(c))         { closerStats[cl].closes++; closerStats[cl].rev += fv(c,'Cash Collected')||0; }
+    if (isShow(c) && callIsClosed(c))         { closerStats[cl].closes++; closerStats[cl].rev += callRev(c); }
     if (fv(c,'Outcome')==='No-Show')            closerStats[cl].noShows++;
   });
   const closerRows = Object.entries(closerStats)
@@ -1585,7 +1642,7 @@ function renderCalls() {
     if (!setterStats[s]) setterStats[s] = { booked:0, shows:0, closes:0, rev:0 };
     setterStats[s].booked++;
     if (isShow(c))        setterStats[s].shows++;
-    if (callIsClosed(c)) { setterStats[s].closes++; setterStats[s].rev += fv(c,'Cash Collected')||0; }
+    if (isShow(c) && callIsClosed(c)) { setterStats[s].closes++; setterStats[s].rev += callRev(c); }
   });
   const setterRows = Object.entries(setterStats)
     .sort((a,b) => b[1].booked - a[1].booked)
@@ -1680,7 +1737,7 @@ function renderCalls() {
       <td>${badge(fv(c,'Call Type'))}</td>
       <td>${showCell}</td>
       <td>${badge(fv(c,'Outcome'))}</td>
-      <td class="r" style="color:${fv(c,'Cash Collected') ? '#f59e0b' : '#374151'}; font-weight:${fv(c,'Cash Collected') ? '600' : '400'};">${F.$(fv(c,'Cash Collected'))}</td>
+      <td class="r" style="color:${callRev(c) ? '#f59e0b' : '#374151'}; font-weight:${callRev(c) ? '600' : '400'};">${callRev(c) ? F.$(callRev(c)) : '—'}</td>
       <td style="color:${fv(c,'Rebook') ? '#f59e0b' : '#374151'};">${fv(c,'Rebook') ? '&#8629; Rebook' : '—'}</td>
       <td style="text-align:center;">${recCell}</td>
     </tr>`;
@@ -1794,43 +1851,6 @@ function renderMeta() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// VIEW: DM CONVERSATIONS
-// ═══════════════════════════════════════════════════════════
-function renderDMs() {
-  const status = document.getElementById('dms-status').value;
-  const setter = document.getElementById('dms-setter').value;
-
-  let dms = [...DB.dms];
-  if (status) dms = dms.filter(d => fv(d,'Status') === status);
-  if (setter) dms = dms.filter(d => fv(d,'Setter') === setter);
-  dms.sort((a,b) => new Date(fv(b,'Last Message')||0) - new Date(fv(a,'Last Message')||0));
-
-  const active = DB.dms.filter(d => fv(d,'Status') === 'Active').length;
-  const booked = DB.dms.filter(d => fv(d,'Booked') === true).length;
-  const bookRate = DB.dms.length > 0 ? booked / DB.dms.length : 0;
-
-  document.getElementById('dms-summary').innerHTML = [
-    kpiCard({ label: 'Active DMs', value: active }),
-    kpiCard({ label: 'Booked from DMs', value: booked, accent: true }),
-    kpiCard({ label: 'DM Book Rate', value: F.pct(bookRate), goalPct: bookRate, goalLabel: 'Book rate' }),
-  ].join('');
-
-  if (!dms.length) {
-    document.getElementById('dms-tbody').innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:#374151;">No conversations found.</td></tr>`;
-    return;
-  }
-  document.getElementById('dms-tbody').innerHTML = dms.map(d => `
-    <tr>
-      <td style="color:#fff;font-weight:500;">${fv(d,'Lead Name') || '—'}</td>
-      <td>${fv(d,'Setter') || '—'}</td>
-      <td>${D.fmtDT(fv(d,'Last Message'))}</td>
-      <td class="r">${fv(d,'Message Count') || 0}</td>
-      <td>${badge(fv(d,'Status'))}</td>
-      <td style="color:${fv(d,'Booked') ? '#10b981' : '#374151'};">${fv(d,'Booked') ? '✓ Booked' : '—'}</td>
-    </tr>`).join('');
-}
-
-// ═══════════════════════════════════════════════════════════
 // VIEW: DIAL TRACKER
 // ═══════════════════════════════════════════════════════════
 function renderDials() {
@@ -1857,8 +1877,16 @@ function renderDials() {
 
   const outbound  = dials.filter(d => fv(d,'Direction') === 'Outbound').length;
   const inbound   = dials.filter(d => fv(d,'Direction') === 'Inbound').length;
-  const connected = dials.filter(d => ['answered','completed'].includes(fv(d,'Status'))).length;
-  const cRate     = outbound > 0 ? connected / outbound : 0;
+  // F3: GHL leaves Status blank on most dials. Treat a call with real talk time as connected,
+  // otherwise connect rate reads 0% even with hours of talk time logged.
+  const isConnected = d => {
+    const st = fv(d,'Status');
+    if (st === 'answered' || st === 'completed') return true;
+    if (!st && (fv(d,'Duration (sec)') || 0) > 0) return true;
+    return false;
+  };
+  const connected = dials.filter(isConnected).length;
+  const cRate     = outbound > 0 ? Math.min(connected / outbound, 1) : 0;
   const totalSec  = dials.reduce((s,d) => s+(fv(d,'Duration (sec)')||0), 0);
 
   document.getElementById('dials-summary').innerHTML = [
@@ -2196,16 +2224,19 @@ async function renderOptins() {
   const appAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Application (Typeform)' && D.in(fv(rec,'Date Opted In'), r));
   const convFunnelEl = document.getElementById('optins-conv-funnels');
 
-  // Fetch platform totals from n8n proxy (keeps API keys server-side)
-  let kitTotal = null, tfTotal = null, tfViews = null;
-  try {
-    const stats = await fetch('https://scalewisemedia.app.n8n.cloud/webhook/platform-stats').then(r => r.ok ? r.json() : null);
-    if (stats) { kitTotal = stats.kitTotal || null; tfTotal = stats.tfResponses || null; tfViews = stats.tfViews || null; }
-  } catch {}
-
-  if (convFunnelEl) convFunnelEl.innerHTML =
-    buildConvFunnel('Kit Lead Magnet', '#10b981', '📧', kitAll, kitTotal, 'Total Kit Subscribers (all time)') +
-    buildConvFunnel('Typeform Application', '#60a5fa', '📋', appAll, tfTotal, 'Form Responses (all time)', tfViews);
+  // F10: render funnels immediately from Airtable data, then fetch platform totals in the
+  // background (the n8n webhook takes ~4s) and patch the two cards when they resolve — so the
+  // rest of the view (pie, daily, booking-rate, funnel charts) no longer waits on the webhook.
+  const renderConvFunnels = (kitTotal, tfTotal, tfViews) => {
+    if (convFunnelEl) convFunnelEl.innerHTML =
+      buildConvFunnel('Kit Lead Magnet', '#10b981', '📧', kitAll, kitTotal, 'Total Kit Subscribers (all time)') +
+      buildConvFunnel('Typeform Application', '#60a5fa', '📋', appAll, tfTotal, 'Form Responses (all time)', tfViews);
+  };
+  renderConvFunnels(null, null, null);
+  fetch('https://scalewisemedia.app.n8n.cloud/webhook/platform-stats')
+    .then(r => r.ok ? r.json() : null)
+    .then(stats => { if (stats && currentView === 'optins') renderConvFunnels(stats.kitTotal || null, stats.tfResponses || null, stats.tfViews || null); })
+    .catch(() => {});
 
   // ── Pie chart ──────────────────────────────────────────
   const srcLabels = Object.keys(srcMap).sort((a,b) => srcMap[b]-srcMap[a]);
@@ -2723,6 +2754,7 @@ function renderCommissions() {
   const filterPeriod = document.getElementById('comm-period')?.value || '';
   const filterRep    = document.getElementById('comm-rep')?.value    || '';
   const filterStatus = document.getElementById('comm-status')?.value || '';
+  const filterSearch = (document.getElementById('comm-search')?.value || '').toLowerCase().trim();
 
   // Populate period options dynamically once
   const periodEl = document.getElementById('comm-period');
@@ -2798,6 +2830,7 @@ function renderCommissions() {
   if (filterPeriod) filtered = filtered.filter(x => x.f['Pay Period'] === filterPeriod);
   if (filterRep)    filtered = filtered.filter(x => x.setter === filterRep || x.closer === filterRep);
   if (filterStatus) filtered = filtered.filter(x => (x.f['Status']||'Pending') === filterStatus);
+  if (filterSearch) filtered = filtered.filter(x => (x.f['Lead Name']||'').toLowerCase().includes(filterSearch));
   filtered.sort((a,b) => (b.f['Close Date']||'').localeCompare(a.f['Close Date']||''));
 
   function selOpts(options, current) {
@@ -3117,14 +3150,14 @@ async function renderHealth() {
     ? DB.optins.reduce((a,b) => (a.createdTime||'') > (b.createdTime||'') ? a : b)
     : null;
   checks.push({ name: 'Last Opt-in', ok: !!lastOptin,
-    detail: lastOptin ? `${fv(lastOptin,'Lead Name')} — ${(lastOptin.createdTime||'').slice(0,10)}` : 'No data' });
+    detail: lastOptin ? `${fv(lastOptin,'Lead Name') || '(unnamed)'} — ${(lastOptin.createdTime||'').slice(0,10)}` : 'No data' });
 
   // 4. Data freshness — last Call booked
   const lastCall = DB.calls.length > 0
     ? DB.calls.reduce((a,b) => (a.createdTime||'') > (b.createdTime||'') ? a : b)
     : null;
   checks.push({ name: 'Last Call Booked', ok: !!lastCall,
-    detail: lastCall ? `${fv(lastCall,'Lead Name')} — ${(lastCall.createdTime||'').slice(0,10)}` : 'No data' });
+    detail: lastCall ? `${fv(lastCall,'Lead Name') || '(unnamed)'} — ${(lastCall.createdTime||'').slice(0,10)}` : 'No data' });
 
   // 5. Show tracking gap — BUG-10: use == null (covers both null and undefined)
   const noShowField = DB.calls.filter(c => fv(c,'Show') == null);
@@ -3240,6 +3273,13 @@ document.addEventListener('DOMContentLoaded', () => {
   ].forEach(([id, fn]) => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', fn);
+  });
+
+  // Live search inputs (Phase 5) — filter tables as you type (debounced to avoid chart thrash)
+  const debounce = (fn, ms=220) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
+  [['calls-search', renderCalls], ['comm-search', renderCommissions]].forEach(([id, fn]) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', debounce(fn));
   });
 
   // Keyboard shortcuts (1-9) + Escape closes disposition modal
