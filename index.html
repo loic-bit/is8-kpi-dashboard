@@ -1354,11 +1354,15 @@ function renderScorecard() {
   const closeRateP = showsP > 0 ? closesP / showsP : 0;
   const copc       = shows > 0 ? rev / shows : 0;
   const copcP      = showsP > 0 ? revP / showsP : 0;
-  const avgDeal    = closes > 0 ? rev / closes : 0;
+  // Deal/close COUNT for avg-deal + CAC = actual payments in the period (commissions), NOT just
+  // on-call closes. Most deals close off-call, so dividing by `closes` (on-call) inflates both.
+  const dealCount  = commInPeriod.length;
+  const dealCountP = commInPeriodP.length;
+  const avgDeal    = dealCount > 0 ? rev / dealCount : 0;
 
   const metaRec = DB.meta.filter(rec => D.in(fv(rec,'Date'), r));
   const spend   = metaRec.reduce((s,a) => s + (fv(a,'Spend')||0), 0);
-  const cac     = closes > 0 && spend > 0 ? spend / closes : null;
+  const cac     = dealCount > 0 && spend > 0 ? spend / dealCount : null;
   const roas    = spend > 0 ? rev / spend : null;
 
   // ── Range label ──
@@ -1429,14 +1433,14 @@ function renderScorecard() {
   // ── Unit economics ──
   document.getElementById('sc-econ').innerHTML = [
     kpiCardTrend({ label: 'CAC', value: cac ? F.$(Math.round(cac)) : '—',
-      sub: spend > 0 ? `${F.$(Math.round(spend))} spend / ${closes} closes` : 'No ad spend data',
+      sub: spend > 0 ? `${F.$(Math.round(spend))} spend / ${dealCount} closes` : 'No ad spend data',
       accent: false, tip: 'Ad spend divided by number of new paid clients' }),
     kpiCardTrend({ label: 'ROAS', value: roas ? roas.toFixed(2) + 'x' : '—',
       sub: spend > 0 ? `${F.$(Math.round(rev))} rev / ${F.$(Math.round(spend))} spend` : 'No ad spend data',
       tip: 'Cash collected divided by total ad spend' }),
     kpiCardTrend({ label: 'Avg Deal Size', value: F.$(Math.round(avgDeal)),
-      sub: `${closes} closes this period`,
-      trend: trendBadge(avgDeal, closesP > 0 ? revP/closesP : 0, false, v => F.$(Math.round(v))) }),
+      sub: `${dealCount} closes this period`,
+      trend: trendBadge(avgDeal, dealCountP > 0 ? revP/dealCountP : 0, false, v => F.$(Math.round(v))) }),
     kpiCardTrend({ label: 'Revenue', value: F.$(rev), accent: true,
       goalPct: isPeriodLong ? Math.min(rev / CFG.goals.monthlyRev, 1) : null,
       goalLabel: `of ${F.$(CFG.goals.monthlyRev)} goal`,
