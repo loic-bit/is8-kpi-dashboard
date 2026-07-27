@@ -2,3 +2,8 @@
 *.log
 audit/
 backup/
+
+# env files - never commit
+.env
+.env.*
+!.env.example
