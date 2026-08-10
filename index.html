@@ -1220,7 +1220,9 @@ async function patchRecord(tableId, recordId, fields) {
         `https://api.airtable.com/v0/${CFG.baseId}/${tableId}/${recordId}`,
         { method: 'PATCH',
           headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields }) }
+          // typecast lets Airtable auto-create a select option if a new rep name isn't in the
+          // field's choices yet — prevents the "Save failed" class of error on roster changes.
+          body: JSON.stringify({ fields, typecast: true }) }
       );
       if (resp.ok) return true;
       if (resp.status === 429) continue;
@@ -2760,10 +2762,13 @@ function refreshCommPayoutSummary() {
       if (status === 'Approved') totalApproved += earned;
     });
     const grandTotal = totalSetter + totalCloser;
-    if (grandTotal === 0 && totalOnHold === 0) return null;
+    // Active roster reps ALWAYS render (even at $0) so new hires are visible immediately;
+    // former reps (data-only, e.g. Ben) render only while money is still owed/attributed.
+    const isActiveRep = rep in REP_ROLES;
+    if (!isActiveRep && grandTotal === 0 && totalOnHold === 0) return null;
     return `<tr>
       <td style="font-weight:700;color:#fff;">${rep}</td>
-      <td style="color:#6b7280;font-size:12px;">${REP_ROLES[rep]||''}</td>
+      <td style="color:#6b7280;font-size:12px;">${REP_ROLES[rep]||'Former rep'}</td>
       <td class="r" style="color:#60a5fa;">${F.$(totalSetter)}</td>
       <td class="r" style="color:#a78bfa;">${F.$(totalCloser)}</td>
       <td class="r" style="color:#3b82f6;font-weight:600;">${totalApproved > 0 ? F.$(totalApproved) : '—'}</td>
