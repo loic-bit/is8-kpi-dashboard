@@ -670,7 +670,7 @@
           </select>
           <select id="comm-rep" class="filter-select">
             <option value="">All Reps</option>
-            <option>Max</option><option>Ben</option><option>Will</option><option>Alen</option>
+            <option>Max</option><option>Will</option><option>Alen</option><option>Callum</option><option>Quinn</option><option>Luke</option>
           </select>
           <select id="comm-status" class="filter-select">
             <option value="">All Statuses</option>
@@ -1925,11 +1925,14 @@ function renderDials() {
   // Chart: last 14 days — stacked by team member
   const days14 = D.last(14);
   const labels14 = days14.map(D.shortLabel);
+  // Dialers only. Quinn is a setter but does NOT dial, so he is intentionally excluded here.
+  // Callum + Luke only populate once n8n WF09 maps their GHL username to a team member.
   const DIAL_MEMBERS = [
-    { name: 'Max',  color: '#f59e0b' },
-    { name: 'Ben',  color: '#3b82f6' },
-    { name: 'Will', color: '#10b981' },
-    { name: 'Alen', color: '#8b5cf6' },
+    { name: 'Max',    color: '#f59e0b' },
+    { name: 'Will',   color: '#10b981' },
+    { name: 'Alen',   color: '#8b5cf6' },
+    { name: 'Callum', color: '#3b82f6' },
+    { name: 'Luke',   color: '#ec4899' },
   ];
   const memberDatasets = DIAL_MEMBERS.map(m => ({
     label: m.name,
@@ -2723,8 +2726,11 @@ function openDispositionModal() {
 
 function refreshCommPayoutSummary() {
   const filterPeriod = document.getElementById('comm-period')?.value || '';
-  const REPS = ['Max','Ben','Will','Alen'];
-  const REP_ROLES = { Max:'Setter + Closer', Ben:'Setter', Will:'Closer', Alen:'Closer' };
+  const REP_ROLES = { Max:'Setter + Closer', Will:'Closer', Alen:'Closer', Callum:'Setter', Quinn:'Setter', Luke:'Setter' };
+  // Active roster + anyone already in the commission data (so a fired rep's outstanding payout is
+  // never hidden — they only render a row if they actually have earnings).
+  const dataReps = [...new Set(DB.commissions.flatMap(c => [fv(c,'Setter'), fv(c,'Closer')]).filter(Boolean))];
+  const REPS = [...new Set([...Object.keys(REP_ROLES), ...dataReps])];
 
   const source = filterPeriod
     ? DB.commissions.filter(r => (fv(r,'Pay Period') || '') === filterPeriod)
@@ -2860,10 +2866,15 @@ function renderCommissions() {
   filtered.sort((a,b) => (b.f['Close Date']||'').localeCompare(a.f['Close Date']||''));
 
   function selOpts(options, current) {
-    return options.map(o => `<option value="${o}" ${o===current?'selected':''}>${o||'—'}</option>`).join('');
+    // Preserve any legacy/off-roster value (e.g. a fired rep on their old deals) so it still
+    // renders selected instead of silently blanking the row.
+    const opts = (current && !options.includes(current)) ? [...options, current] : options;
+    return opts.map(o => `<option value="${o}" ${o===current?'selected':''}>${o||'—'}</option>`).join('');
   }
 
-  const SETTER_OPTS    = ['', 'Max', 'Ben'];
+  // Active roster. Setters: Max (also closer), Callum, Quinn, Luke (Ben fired 2026-08). Fired reps
+  // stay attributed on their historical deals via selOpts, just aren't offered for new assignment.
+  const SETTER_OPTS    = ['', 'Max', 'Callum', 'Quinn', 'Luke'];
   const CLOSER_OPTS    = ['', 'Max', 'Will', 'Alen'];
   const STATUS_OPTS         = ['Pending', 'Approved', 'Paid', 'Refunded'];
   const DEPOSIT_STATUS_OPTS = ['Pending', 'Approved', 'Paid', 'Refunded'];
