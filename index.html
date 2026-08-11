@@ -2251,8 +2251,62 @@ async function renderOptins() {
     </div>`;
   }
 
+  // Typeform funnel is CALLS-based, not opt-in-based. Everyone books through a Typeform application,
+  // so "booked from Typeform" = Calls with Booked Via = 'Application (Typeform)' in this period —
+  // cross-referencing the Typeform application to its calendar booking (GHL Appointment ID) and
+  // lead source. The opt-ins table has no 'Application (Typeform)' records, which is why the old
+  // email-match funnel bottomed out at 0.
+  function buildTypeformFunnel(icon, bookedCalls, paidEmailSet, platformTotal, viewCount) {
+    const color = '#60a5fa';
+    const booked = bookedCalls.length;
+    const paid = bookedCalls.filter(c => paidEmailSet.has((fv(c,'Lead Email')||'').toLowerCase())).length;
+    const payPct = booked > 0 ? paid / booked : 0;
+    const completionRate = viewCount && platformTotal ? platformTotal / viewCount : null;
+    const bySrc = {};
+    bookedCalls.forEach(c => { const s = fv(c,'Lead Source') || 'Untagged'; bySrc[s] = (bySrc[s]||0)+1; });
+    const srcEntries = Object.entries(bySrc).sort((a,b)=>b[1]-a[1]);
+    const bar = (val, max, clr) => `<div style="height:4px;background:#1e1e1e;border-radius:99px;overflow:hidden;margin-top:6px;"><div style="height:100%;width:${Math.round(Math.min(val/Math.max(max,1),1)*100)}%;background:${clr};border-radius:99px;transition:width 0.4s;"></div></div>`;
+
+    const viewRow = viewCount ? `<div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span style="font-size:12px;color:#9ca3af;">Form Views (all time)</span>
+          <span style="font-size:18px;font-weight:700;color:#fff;">${viewCount.toLocaleString()}</span>
+        </div>${bar(viewCount, viewCount, color + '33')}</div>` : '';
+    const respRow = platformTotal ? `<div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span style="font-size:12px;color:#9ca3af;">Form Responses (all time)${completionRate ? ` <span style="font-size:11px;color:${completionRate>=0.3?'#10b981':'#f59e0b'};font-weight:500;">${F.pct(completionRate)} completion</span>` : ''}</span>
+          <span style="font-size:18px;font-weight:700;color:#fff;">${platformTotal.toLocaleString()}</span>
+        </div>${bar(platformTotal, viewCount||platformTotal, color + '55')}</div>` : '';
+
+    const srcChips = srcEntries.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+      ${srcEntries.map(([s,n]) => `<span style="font-size:10.5px;color:#9ca3af;background:#1a1a1a;border:1px solid #242424;border-radius:5px;padding:1px 7px;">${s} <strong style="color:#d1d5db;">${n}</strong></span>`).join('')}
+    </div>` : '';
+
+    return `<div class="kpi-card">
+      <p style="font-size:12px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:14px;">${icon} Typeform Application — Conversion Funnel</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${viewRow}${respRow}
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:12px;color:#9ca3af;">Booked a Call <span style="font-size:10px;color:#4b5563;">(this period)</span></span>
+            <span style="font-size:18px;font-weight:700;color:#fff;">${booked}</span>
+          </div>
+          ${bar(booked, Math.max(booked, platformTotal||booked), color)}
+          ${srcChips}
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:12px;color:#9ca3af;">Paid / Closed <span style="font-size:10px;color:#4b5563;">(this period)</span></span>
+            <span style="font-size:16px;font-weight:700;color:#fff;">${paid} <span style="font-size:12px;color:${paid>0?'#10b981':'#4b5563'};font-weight:500;">${booked>0 ? F.pct(payPct)+' of booked' : '—'}</span></span>
+          </div>
+          ${bar(paid, Math.max(booked,1), '#10b981')}
+        </div>
+      </div>
+    </div>`;
+  }
+
   const kitAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Kit / Lead Magnet' && D.in(fv(rec,'Date Opted In'), r));
-  const appAll  = DB.optins.filter(rec => fv(rec,'Opt-in Source') === 'Application (Typeform)' && D.in(fv(rec,'Date Opted In'), r));
+  const tfBookedCalls = DB.calls.filter(c => fv(c,'Booked Via') === 'Application (Typeform)' && D.in(fv(c,'Call Date'), r));
   const convFunnelEl = document.getElementById('optins-conv-funnels');
 
   // F10: render funnels immediately from Airtable data, then fetch platform totals in the
@@ -2261,7 +2315,7 @@ async function renderOptins() {
   const renderConvFunnels = (kitTotal, tfTotal, tfViews) => {
     if (convFunnelEl) convFunnelEl.innerHTML =
       buildConvFunnel('Kit Lead Magnet', '#10b981', '📧', kitAll, kitTotal, 'Total Kit Subscribers (all time)') +
-      buildConvFunnel('Typeform Application', '#60a5fa', '📋', appAll, tfTotal, 'Form Responses (all time)', tfViews);
+      buildTypeformFunnel('📋', tfBookedCalls, paidEmails, tfTotal, tfViews);
   };
   renderConvFunnels(null, null, null);
   fetch('https://scalewisemedia.app.n8n.cloud/webhook/platform-stats')
