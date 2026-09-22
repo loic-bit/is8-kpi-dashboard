@@ -1928,14 +1928,14 @@ function renderDials() {
   // Chart: last 14 days — stacked by team member
   const days14 = D.last(14);
   const labels14 = days14.map(D.shortLabel);
-  // Dialers only. Quinn is a setter but does NOT dial, so he is intentionally excluded here.
-  // Callum + Luke only populate once n8n WF09 maps their GHL username to a team member.
+  // Dialers only. Each name must also be mapped to its GHL user id in n8n WF09 or dials stay untagged.
   const DIAL_MEMBERS = [
     { name: 'Max',    color: '#f59e0b' },
     { name: 'Will',   color: '#10b981' },
     { name: 'Alen',   color: '#8b5cf6' },
     { name: 'Callum', color: '#3b82f6' },
     { name: 'Luke',   color: '#ec4899' },
+    { name: 'Quinn',  color: '#14b8a6' },
   ];
   const memberDatasets = DIAL_MEMBERS.map(m => ({
     label: m.name,
