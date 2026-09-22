@@ -672,7 +672,7 @@
           </select>
           <select id="comm-rep" class="filter-select">
             <option value="">All Reps</option>
-            <option>Max</option><option>Will</option><option>Alen</option><option>Callum</option><option>Quinn</option><option>Luke</option>
+            <option>Max</option><option>Will</option><option>Alen</option><option>Callum</option><option>Quinn</option><option>Luke</option><option>Zane</option>
           </select>
           <select id="comm-status" class="filter-select">
             <option value="">All Statuses</option>
@@ -1936,6 +1936,7 @@ function renderDials() {
     { name: 'Callum', color: '#3b82f6' },
     { name: 'Luke',   color: '#ec4899' },
     { name: 'Quinn',  color: '#14b8a6' },
+    { name: 'Zane',   color: '#f97316' },
   ];
   const memberDatasets = DIAL_MEMBERS.map(m => ({
     label: m.name,
@@ -2783,7 +2784,7 @@ function openDispositionModal() {
 
 function refreshCommPayoutSummary() {
   const filterPeriod = document.getElementById('comm-period')?.value || '';
-  const REP_ROLES = { Max:'Setter + Closer', Will:'Closer', Alen:'Closer', Callum:'Setter', Quinn:'Setter', Luke:'Setter' };
+  const REP_ROLES = { Max:'Setter + Closer', Will:'Closer', Alen:'Closer', Callum:'Setter', Quinn:'Setter', Luke:'Setter', Zane:'Setter' };
   // Active roster + anyone already in the commission data (so a fired rep's outstanding payout is
   // never hidden — they only render a row if they actually have earnings).
   const dataReps = [...new Set(DB.commissions.flatMap(c => [fv(c,'Setter'), fv(c,'Closer')]).filter(Boolean))];
@@ -2934,7 +2935,7 @@ function renderCommissions() {
 
   // Active roster. Setters: Max (also closer), Callum, Quinn, Luke (Ben fired 2026-08). Fired reps
   // stay attributed on their historical deals via selOpts, just aren't offered for new assignment.
-  const SETTER_OPTS    = ['', 'Max', 'Callum', 'Quinn', 'Luke'];
+  const SETTER_OPTS    = ['', 'Max', 'Callum', 'Quinn', 'Luke', 'Zane'];
   const CLOSER_OPTS    = ['', 'Max', 'Will', 'Alen'];
   const STATUS_OPTS         = ['Pending', 'Approved', 'Paid', 'Refunded'];
   const DEPOSIT_STATUS_OPTS = ['Pending', 'Approved', 'Paid', 'Refunded'];
