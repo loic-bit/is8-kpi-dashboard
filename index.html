@@ -25,10 +25,8 @@
     }
   </script>
   <!--
-    SECURITY: The Airtable token must be injected at deploy time.
-    In Netlify: Site settings > Build & deploy > Snippet injection > Before </head>:
-    <script>window.__AT__ = 'YOUR_TOKEN_HERE';</script>
-    Never commit the live token to the GitHub repo.
+    Data comes from server.py (/api/*), which holds the Airtable token and a
+    synced cache of every table. Nothing secret is ever sent to this page.
   -->
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -713,25 +711,18 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════
-// CONFIG  — change password here
+// CONFIG  (access code is checked by server.py, see DASHBOARD_PW_SHA256)
 // ═══════════════════════════════════════════════════════════
 const CFG = {
-  // SHA-256 of 'scalewise' — password never stored in plain text
-  pwHash: '2ce77d9c6d54b013c56da8a059e17c456476cb773f21e87a0df677f476e1a966',
-  authKey: 'swm_kpi_auth_v1',
-  baseId: 'apppAaY1mCbpmXSGd',
-  // Token injected at deploy time via Netlify snippet — never commit the live value
-  token: window.__AT__ || '',
+  authKey: 'is8_kpi_session_v2',
   tables: {
-    leads:       'tblYr2IkIPKmrE013',
     calls:       'tblRt7VOLkoT5KPEO',
     callLog:     'tblbGDsdB9AtcDUb4',
-    dms:         'tblkt8IyLWWdBrv7j',
     meta:        'tblkZxSk3a214vcHf',
     optins:      'tblTgHxLivupDLxw1',
     commissions: 'tblo9FfovRHFAYzkp',
   },
-  cacheTTL: 5 * 60 * 1000,
+  pollMs: 60 * 1000,      // ask the server for changes every minute while the tab is visible
   goals: {
     showRate:    0.75,
     closeRate:   0.30,
@@ -743,16 +734,27 @@ const CFG = {
 // AUTH
 // ═══════════════════════════════════════════════════════════
 const Auth = {
+  token() {
+    try { return sessionStorage.getItem(CFG.authKey) || ''; } catch { return ''; }
+  },
+  // Returns '' on success, otherwise the message to show under the field.
   login: async function(input) {
-    const enc = new TextEncoder();
-    const buf = await crypto.subtle.digest('SHA-256', enc.encode(input));
-    const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-    const ok = hex === CFG.pwHash;
-    if (ok) sessionStorage.setItem(CFG.authKey, hex);
-    return ok;
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: input }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.token) return body.error || 'Incorrect access code.';
+      sessionStorage.setItem(CFG.authKey, body.token);
+      return '';
+    } catch {
+      return 'Unable to reach the dashboard server. Check your connection and try again.';
+    }
   },
   check: function() {
-    return sessionStorage.getItem(CFG.authKey) === CFG.pwHash;
+    const exp = parseInt(Auth.token().split('.')[0], 10);
+    return exp * 1000 > Date.now();
   },
   logout: function() {
     sessionStorage.removeItem(CFG.authKey);
@@ -761,73 +763,30 @@ const Auth = {
 };
 
 // ═══════════════════════════════════════════════════════════
-// CACHE
+// SERVER API  (server.py keeps the Airtable cache; the browser never pages Airtable)
 // ═══════════════════════════════════════════════════════════
-function cacheKey(tableId, formula) {
-  const fHash = formula ? btoa(unescape(encodeURIComponent(formula))).slice(0,20) : 'none';
-  return `c_${tableId}_${fHash}`;
-}
-
-const Cache = {
-  get(k) {
-    try {
-      const v = sessionStorage.getItem(k);
-      if (!v) return null;
-      const p = JSON.parse(v);
-      if (Date.now() - p.ts > CFG.cacheTTL) { sessionStorage.removeItem(k); return null; }
-      return p.d;
-    } catch { return null; }
-  },
-  set(k, d) { try { sessionStorage.setItem(k, JSON.stringify({ d, ts: Date.now() })); } catch {} },
-  clear() { Object.keys(sessionStorage).filter(k => k.startsWith('c_')).forEach(k => sessionStorage.removeItem(k)); }
-};
-
-// ═══════════════════════════════════════════════════════════
-// AIRTABLE API
-// ═══════════════════════════════════════════════════════════
-async function fetchTable(tableId, formula = '') {
-  const ck = cacheKey(tableId, formula);
-  const hit = Cache.get(ck);
-  if (hit) return hit;
-
-  const recs = [];
-  let offset = null;
-  const headers = { Authorization: 'Bearer ' + CFG.token };
-
-  do {
-    const p = new URLSearchParams({ pageSize: '100' });
-    if (formula) p.set('filterByFormula', formula);
-    if (offset) p.set('offset', offset);
-    const url = `https://api.airtable.com/v0/${CFG.baseId}/${tableId}?${p}`;
-
-    let res, lastErr;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1000));
-        res = await fetch(url, { headers });
-        if (res.status === 429) { await new Promise(r => setTimeout(r, 2000)); continue; }
-        break;
-      } catch (e) { lastErr = e; }
-    }
-    if (!res) throw lastErr || new Error('Network error after retries');
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(`Airtable ${res.status}: ${txt}`);
-    }
-    const data = await res.json();
-    recs.push(...(data.records || []));
-    offset = data.offset || null;
-  } while (offset);
-
-  Cache.set(ck, recs);
-  return recs;
+async function api(path, opts = {}) {
+  const headers = Object.assign({ Authorization: 'Bearer ' + Auth.token() }, opts.headers || {});
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, Object.assign({}, opts, { headers, cache: 'no-store' }));
+  if (res.status === 401) {
+    sessionStorage.removeItem(CFG.authKey);
+    location.reload();
+    throw new Error('Session expired');
+  }
+  return res;
 }
 
 // ═══════════════════════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════════════════════
-const DB = { leads: [], calls: [], callLog: [], dms: [], meta: [], optins: [], commissions: [] };
+const DB = { calls: [], callLog: [], meta: [], optins: [], commissions: [] };
 let loaded = false, loading = false;
+let dataVersion = '';        // server payload version; lets polls skip unchanged data
+let syncState = { syncedAt: null, syncing: false };
+let pendingRender = false;   // new data arrived while someone was editing a row
+let inflightWrites = 0;      // saves in progress; polls wait so they don't undo an edit
+let followUpTimer = null, followUps = 0;
 
 function setHealthDot(status) {
   const dot = document.getElementById('health-dot');
@@ -837,78 +796,124 @@ function setHealthDot(status) {
   dot.title = { loading: 'Loading data...', ok: 'All systems operational', error: 'Data load failed', idle: 'Not loaded' }[status] || '';
 }
 
-async function loadData(force = false) {
+// loadData()          first load (no-op once loaded)
+// loadData(true)      Refresh button: server pulls from Airtable now, then we fetch
+// loadData(false,true) background poll: tiny request, re-renders only if data changed
+async function loadData(force = false, poll = false) {
   if (loading) return;
-  if (loaded && !force) return;
-
-  if (!CFG.token) {
-    const errEl = document.getElementById('data-error-banner');
-    if (errEl) {
-      errEl.textContent = 'Airtable token missing — server did not inject it. Contact admin.';
-      errEl.style.display = 'block';
-    }
-    setHealthDot('error');
-    return;
-  }
-
-  if (force) Cache.clear();
+  if (loaded && !force && !poll) return;
   loading = true;
-  setRefreshing(true);
-  setHealthDot('loading');
-
-  // Do not call showSkeletons — every view uses getElementById on inner elements
-  // that would be destroyed by innerHTML replacement. The global refresh spinner
-  // (setRefreshing + setHealthDot) is sufficient loading feedback.
+  if (!poll) { setRefreshing(true); setHealthDot('loading'); }
 
   try {
-    const f90lead  = "IS_AFTER({Date Added}, DATEADD(TODAY(), -90, 'days'))";
-    const f90call  = "IS_AFTER({Call Date}, DATEADD(TODAY(), -90, 'days'))";
-    const f90date  = "IS_AFTER({Date}, DATEADD(TODAY(), -90, 'days'))";
-
-    [DB.leads, DB.calls, DB.callLog, DB.dms, DB.meta, DB.optins, DB.commissions] = await Promise.all([
-      fetchTable(CFG.tables.leads,   f90lead),
-      fetchTable(CFG.tables.calls,   f90call),
-      fetchTable(CFG.tables.callLog, f90date),
-      fetchTable(CFG.tables.dms, "IS_AFTER({Last Message}, DATEADD(TODAY(), -90, 'days'))"),
-      fetchTable(CFG.tables.meta,    f90date),
-      fetchTable(CFG.tables.optins,  "IS_AFTER({Date Opted In}, DATEADD(TODAY(), -365, 'days'))"),
-      fetchTable(CFG.tables.commissions),
-    ]);
-
-    // Strip test records from all tables at load time
-    const isTest = r => {
-      const name = (fv(r,'Lead Name')||fv(r,'Name')||'').toLowerCase();
-      const email = (fv(r,'Email')||fv(r,'Lead Email')||'').toLowerCase();
-      return name.includes('test') || email.includes('test');
-    };
-    DB.leads       = DB.leads.filter(r => !isTest(r));
-    DB.calls       = DB.calls.filter(r => !isTest(r));
-    DB.optins      = DB.optins.filter(r => !isTest(r));
-    DB.commissions = DB.commissions.filter(r => !isTest(r));
-
-    loaded = true;
+    if (force && loaded) {
+      const r = await api('/api/refresh', { method: 'POST', body: '{}' });
+      if (r.ok) readSyncHeaders(r);
+    }
+    const res = await api('/api/data' + (dataVersion && !force ? '?v=' + encodeURIComponent(dataVersion) : ''));
+    if (res.status === 503) {
+      showWarming(await res.json().catch(() => ({})));
+      setTimeout(() => loadData(false, loaded), 3000);
+      return;
+    }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Server returned ' + res.status);
+    readSyncHeaders(res);
+    const body = await res.json();
+    hideBanner();
     setHealthDot('ok');
-    document.getElementById('last-synced').textContent =
-      new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    updateNavBadges();
-    renderCurrent();
-  } catch(e) {
+    if (body.unchanged) return;
+    if (inflightWrites > 0) { setTimeout(() => loadData(false, true), 3000); return; }
+    applyData(body);
+  } catch (e) {
+    if (e.message === 'Session expired') return;
     console.error(e);
     setHealthDot('error');
-    const errEl = document.getElementById('data-error-banner');
-    if (errEl) {
-      errEl.textContent = 'Data load failed: ' + e.message + ' — ';
-      const btn = document.createElement('button');
-      btn.textContent = 'Retry';
-      btn.style.cssText = 'background:#ef4444;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:12px;margin-left:4px;';
-      btn.onclick = () => { errEl.textContent = ''; loadData(); };
-      errEl.appendChild(btn);
-      errEl.style.display = 'block';
-    }
+    if (!poll || !loaded) showBanner('error', 'Unable to load data: ' + e.message, true);
   } finally {
     loading = false;
-    setRefreshing(false);
+    if (!poll) setRefreshing(false);
+    renderSyncLabel();
   }
+}
+
+function applyData(body) {
+  const t = body.tables || {};
+  // Strip test records from all tables at load time
+  const isTest = r => {
+    const name = (fv(r,'Lead Name')||fv(r,'Name')||'').toLowerCase();
+    const email = (fv(r,'Email')||fv(r,'Lead Email')||'').toLowerCase();
+    return name.includes('test') || email.includes('test');
+  };
+  DB.calls       = (t.calls || []).filter(r => !isTest(r));
+  DB.callLog     = t.callLog || [];
+  DB.meta        = t.meta || [];
+  DB.optins      = (t.optins || []).filter(r => !isTest(r));
+  DB.commissions = (t.commissions || []).filter(r => !isTest(r));
+  dataVersion = body.version || '';
+  loaded = true;
+  updateNavBadges();
+  if (userIsEditing()) pendingRender = true;
+  else renderCurrent();
+}
+
+// Server reports when it last pulled from Airtable, and whether it is pulling right now
+// (after the dashboard sat idle). While it is, poll every 2s so fresh numbers land quickly.
+function readSyncHeaders(res) {
+  syncState.syncedAt = res.headers.get('X-Synced-At') || syncState.syncedAt;
+  syncState.syncing = res.headers.get('X-Syncing') === '1';
+  clearTimeout(followUpTimer);
+  if (syncState.syncing && followUps < 15) {
+    followUps++;
+    followUpTimer = setTimeout(() => loadData(false, true), 2000);
+  } else if (!syncState.syncing) {
+    followUps = 0;
+  }
+}
+
+function renderSyncLabel() {
+  const el = document.getElementById('last-synced');
+  if (!el) return;
+  if (syncState.syncing) { el.textContent = 'Updating…'; return; }
+  if (!syncState.syncedAt) return;
+  const d = new Date(syncState.syncedAt);
+  el.textContent = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  el.title = 'Last pulled from Airtable ' + d.toLocaleString('en-US');
+}
+
+// A row's select or checkbox has focus: re-rendering now would close it mid-edit.
+function userIsEditing() {
+  const a = document.activeElement;
+  return !!a && /^(SELECT|INPUT|TEXTAREA)$/.test(a.tagName) && !a.id && !!a.closest('#main');
+}
+
+function showBanner(kind, text, retry) {
+  const el = document.getElementById('data-error-banner');
+  if (!el) return;
+  const info = kind === 'info';
+  el.style.background  = info ? 'rgba(245,158,11,0.08)' : 'rgba(239,68,68,0.1)';
+  el.style.borderColor = info ? 'rgba(245,158,11,0.3)'  : 'rgba(239,68,68,0.3)';
+  el.style.color       = info ? '#fbbf24' : '#f87171';
+  el.textContent = text + ' ';
+  if (retry) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Try Again';
+    btn.style.cssText = 'background:#ef4444;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:12px;margin-left:4px;';
+    btn.onclick = () => { hideBanner(); loadData(loaded); };
+    el.appendChild(btn);
+  }
+  el.style.display = 'block';
+}
+
+function hideBanner() {
+  const el = document.getElementById('data-error-banner');
+  if (el) el.style.display = 'none';
+}
+
+// Only after a server restart: the server re-reads every table once (about 75 seconds).
+function showWarming(w) {
+  const ready = w.tablesReady || 0, total = w.tablesTotal || 5;
+  const recs = (w.records || 0).toLocaleString('en-US');
+  showBanner('info', `The server restarted and is re-reading Airtable: ${ready} of ${total} tables ready, ${recs} records so far. The dashboard fills in by itself when this finishes, usually within 90 seconds.`);
 }
 
 function setRefreshing(on) {
@@ -916,7 +921,7 @@ function setRefreshing(on) {
   const label = document.getElementById('refresh-label');
   if (on) {
     icon.style.animation = 'spin 0.7s linear infinite';
-    label.textContent = 'Loading...';
+    label.textContent = 'Syncing…';
   } else {
     icon.style.animation = '';
     label.textContent = 'Refresh Data';
@@ -1213,26 +1218,26 @@ function downloadCSV(rows, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000); // F15: release the blob URL
 }
 
-// Unified Airtable PATCH (replaces patchCall + patchCommission)
+// Unified record save (replaces patchCall + patchCommission). server.py writes it to
+// Airtable with typecast:true (a new rep name auto-creates its select option, so roster
+// changes never hit "Save failed") and updates its cache, so the next load already has it.
 async function patchRecord(tableId, recordId, fields) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 1500));
-      const resp = await fetch(
-        `https://api.airtable.com/v0/${CFG.baseId}/${tableId}/${recordId}`,
-        { method: 'PATCH',
-          headers: { Authorization: `Bearer ${CFG.token}`, 'Content-Type': 'application/json' },
-          // typecast lets Airtable auto-create a select option if a new rep name isn't in the
-          // field's choices yet — prevents the "Save failed" class of error on roster changes.
-          body: JSON.stringify({ fields, typecast: true }) }
-      );
-      if (resp.ok) return true;
-      if (resp.status === 429) continue;
-      console.error('Airtable PATCH failed:', resp.status, await resp.text());
-      return false;
-    } catch (e) { console.error('Airtable PATCH error:', e); }
+  const table = Object.keys(CFG.tables).find(k => CFG.tables[k] === tableId);
+  inflightWrites++;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+        const resp = await api('/api/patch', { method: 'POST', body: JSON.stringify({ table, id: recordId, fields }) });
+        if (resp.ok) return true;
+        console.error('Save failed:', resp.status, await resp.text());
+        if (resp.status < 500) return false;
+      } catch (e) { console.error('Save error:', e); }
+    }
+    return false;
+  } finally {
+    inflightWrites--;
   }
-  return false;
 }
 
 // Skeleton loader — call before data fetch to show shimmer cards
@@ -2320,7 +2325,7 @@ async function renderOptins() {
       buildTypeformFunnel('📋', tfBookedCalls, paidEmails, tfTotal, tfViews);
   };
   renderConvFunnels(null, null, null);
-  fetch('https://scalewisemedia.app.n8n.cloud/webhook/platform-stats')
+  api('/api/platform-stats')
     .then(r => r.ok ? r.json() : null)
     .then(stats => { if (stats && currentView === 'optins') renderConvFunnels(stats.kitTotal || null, stats.tfResponses || null, stats.tfViews || null); })
     .catch(() => {});
@@ -2710,9 +2715,6 @@ async function dispositionCall(recordId, outcome) {
   const ok = await patchRecord(CFG.tables.calls, recordId, fields);
 
   if (ok) {
-    // Invalidate calls cache so a page refresh fetches updated outcomes from Airtable
-    Object.keys(sessionStorage).filter(k => k.startsWith('c_' + CFG.tables.calls)).forEach(k => sessionStorage.removeItem(k));
-
     const rec = DB.calls.find(c => c.id === recordId);
     if (rec) { rec.fields.Outcome = outcome; if (fields.Show !== undefined) rec.fields.Show = fields.Show; }
     if (row) { row.style.transition = 'all 0.25s'; row.style.opacity = '0'; row.style.maxHeight = '0'; row.style.overflow = 'hidden'; setTimeout(() => row.remove(), 250); }
@@ -3135,8 +3137,6 @@ function renderCommissions() {
       const ok = await patchRecord(CFG.tables.commissions, rid, patchFields);
 
       if (ok) {
-        // Invalidate commissions cache so a page refresh fetches fresh data
-        sessionStorage.removeItem(cacheKey(CFG.tables.commissions));
         refreshCommPayoutSummary();
       } else {
         // Save failed — show red error on the row so the user knows
@@ -3218,21 +3218,23 @@ async function renderHealth() {
 
   panel.innerHTML = '<div style="color:#6b7280; grid-column:1/-1;">Running checks...</div>';
 
-  const AT = CFG.token;
-  const BASE = CFG.baseId;
-
   const checks = [];
 
-  const checkHttp = async (name, fn) => {
-    try { const ok = await fn(); checks.push({ name, ok, detail: ok ? 'Connected' : 'No data returned' }); }
-    catch(e) { checks.push({ name, ok: false, detail: e.message?.slice(0,80) || 'Error' }); }
-  };
-
-  // 1. Airtable connection
-  await checkHttp('Airtable', async () => {
-    const r = await fetch(`https://api.airtable.com/v0/${BASE}/${CFG.tables.commissions}?maxRecords=1`, { headers: { Authorization: `Bearer ${AT}` } });
-    return r.ok;
-  });
+  // 1. Airtable sync: server.py pulls changes every 2 min while anyone has the
+  //    dashboard open (every 15 min otherwise), so a last pull over 20 min old means trouble.
+  try {
+    const h = await (await api('/api/health')).json();
+    const ageMin = h.syncedAt ? Math.floor((Date.now() - new Date(h.syncedAt)) / 60000) : null;
+    const failing = Object.entries(h.tables || {}).filter(([, t]) => t.error);
+    const ok = h.ready && !failing.length && ageMin !== null && ageMin <= 20;
+    checks.push({ name: 'Airtable Sync', ok,
+      detail: failing.length
+        ? `${failing[0][0]} is not syncing: ${failing[0][1].error}`.slice(0, 120)
+        : !h.ready ? 'Server is re-reading Airtable after a restart'
+        : `${(h.records || 0).toLocaleString('en-US')} records cached · last pull ${ageMin < 1 ? 'under a minute' : ageMin + ' min'} ago` });
+  } catch (e) {
+    checks.push({ name: 'Airtable Sync', ok: false, detail: 'Unable to reach the dashboard server' });
+  }
 
   // 2. Whop data freshness — check via commissions table (avoids exposing Whop API key in browser)
   const whopPays = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded');
@@ -3289,11 +3291,18 @@ async function renderHealth() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// AUTO REFRESH (every 5 min, only when tab is visible)
+// AUTO REFRESH (every minute while the tab is visible; a no-change answer is ~100 bytes)
 // ═══════════════════════════════════════════════════════════
 setInterval(() => {
-  if (Auth.check() && document.visibilityState === 'visible') loadData(true);
-}, 5 * 60 * 1000);
+  if (Auth.check() && loaded && document.visibilityState === 'visible') loadData(false, true);
+}, CFG.pollMs);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Auth.check() && loaded) loadData(false, true);
+});
+// Data that arrived mid-edit renders once focus leaves the row's control.
+document.addEventListener('focusout', () => setTimeout(() => {
+  if (pendingRender && !userIsEditing()) { pendingRender = false; renderCurrent(); }
+}, 0));
 
 // ═══════════════════════════════════════════════════════════
 // INIT
@@ -3305,11 +3314,11 @@ document.addEventListener('DOMContentLoaded', () => {
   pwEl.addEventListener('focus', () => pwEl.style.borderColor = '#f59e0b');
   pwEl.addEventListener('blur',  () => pwEl.style.borderColor = '#222');
 
-  // SEC-03: async SHA-256 login
+  // SEC-03: access code checked server-side (server.py /api/login)
   async function tryLogin() {
-    const ok = await Auth.login(pwEl.value.trim());
+    const failure = await Auth.login(pwEl.value.trim());
     const err = document.getElementById('auth-err');
-    if (ok) {
+    if (!failure) {
       document.getElementById('auth-gate').style.display = 'none';
       document.getElementById('app').style.display = 'block';
       err.style.display = 'none';
@@ -3319,6 +3328,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (hashView && views.includes(hashView)) navigate(hashView);
       loadData();
     } else {
+      err.textContent = failure;
       err.style.display = 'block';
       pwEl.value = '';
       pwEl.style.borderColor = '#ef4444';
