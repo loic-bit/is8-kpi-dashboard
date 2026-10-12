@@ -627,7 +627,7 @@
         <div style="overflow-x:auto;">
           <table class="data-table">
             <thead><tr>
-              <th>Customer</th><th>Date</th><th>Product</th><th>Type</th><th class="r">Amount</th><th>Whop ID</th>
+              <th>Customer</th><th>Date</th><th>Closer</th><th>Status</th><th class="r">Amount</th><th>Payment</th>
             </tr></thead>
             <tbody id="rev-tbody"><tr><td colspan="6" style="text-align:center; padding:40px; color:#4b5563;">Loading...</td></tr></tbody>
           </table>
@@ -780,7 +780,7 @@ async function api(path, opts = {}) {
 // ═══════════════════════════════════════════════════════════
 // DATA STORE
 // ═══════════════════════════════════════════════════════════
-const DB = { calls: [], callLog: [], meta: [], optins: [], commissions: [] };
+const DB = { calls: [], callLog: [], meta: [], optins: [], commissions: [], payments: [] };
 let loaded = false, loading = false;
 let dataVersion = '';        // server payload version; lets polls skip unchanged data
 let syncState = { syncedAt: null, syncing: false };
@@ -849,6 +849,7 @@ function applyData(body) {
   DB.meta        = t.meta || [];
   DB.optins      = (t.optins || []).filter(r => !isTest(r));
   DB.commissions = (t.commissions || []).filter(r => !isTest(r));
+  DB.payments    = t.payments || [];   // every Whop + Commas payment (all time) + approved manual ones
   dataVersion = body.version || '';
   loaded = true;
   updateNavBadges();
@@ -1182,6 +1183,14 @@ function showBadge(show) {
 // TOP-LEVEL UTILITIES
 // ═══════════════════════════════════════════════════════════
 
+// Does this commission row count as revenue? server.py decides from Whop + Commas (c.pay):
+// the payment exists, isn't refunded, and this is the first row for it. Approved manual
+// payments (WIRE-/ZELLE- ids) count too. Booked calls play no part.
+function isRevenue(c) {
+  if (c.pay) return c.pay.counts === true;
+  return (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded';
+}
+
 // Shared close-date helper — used in Scorecard, Calls, Revenue, Health
 function commDate(c) {
   return fv(c,'Close Date') || (c.createdTime || '').split('T')[0];
@@ -1317,8 +1326,8 @@ function renderScorecard() {
   const showConf  = dispCalls.length >= MIN_SAMPLE;
   const closeConf = shows >= MIN_SAMPLE;
   // Revenue: Whop payments whose Close Date falls in this period
-  const commInPeriod  = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' && D.in(commDate(c), r));
-  const commInPeriodP = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' && D.in(commDate(c), rp));
+  const commInPeriod  = DB.commissions.filter(c => isRevenue(c) && D.in(commDate(c), r));
+  const commInPeriodP = DB.commissions.filter(c => isRevenue(c) && D.in(commDate(c), rp));
   const rev  = commInPeriod.reduce((s,c)  => s + (fv(c,'Deal Amount')||0), 0);
   const revP = commInPeriodP.reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
@@ -1326,7 +1335,7 @@ function renderScorecard() {
   // Matched by email — handles follow-up closes (paid after the call period) accurately.
   const everPaidEmails = new Set(
     DB.commissions
-      .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded')
+      .filter(c => isRevenue(c))
       .map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean)
   );
   const showRecords  = calls.filter(c => isShow(c));
@@ -1572,7 +1581,7 @@ function renderCalls() {
   // unreliable because reps mark Follow Up even when a deal closes and the client pays on Whop.
   const commPaidEmails = new Set(
     DB.commissions
-      .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded')
+      .filter(c => isRevenue(c))
       .map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean)
   );
   const callIsClosed = c => fv(c,'Outcome') === 'Closed'
@@ -1583,7 +1592,7 @@ function renderCalls() {
   // NOT the calls "Cash Collected" field which is only populated on ~26% of call records.
   const commRevByEmail = {};
   DB.commissions
-    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' && D.in(commDate(c), r))
+    .filter(c => isRevenue(c) && D.in(commDate(c), r))
     .forEach(c => {
       const em = (fv(c,'Lead Email')||'').toLowerCase();
       if (em) commRevByEmail[em] = (commRevByEmail[em]||0) + (fv(c,'Deal Amount')||0);
@@ -1592,13 +1601,13 @@ function renderCalls() {
 
   // Revenue from commissions matched to calls in this period
   const rev = DB.commissions
-    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' && D.in(commDate(c), r))
+    .filter(c => isRevenue(c) && D.in(commDate(c), r))
     .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   // commClosesCount (all closes in period from commissions) is computed with the leaderboard below;
   // hoist the count here so the KPI cards use the true close count, not just on-call closes.
   const periodCloseCount = DB.commissions.filter(c =>
-    (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' &&
+    isRevenue(c) &&
     (fv(c,'Payment Type')||'Full Payment') !== 'Deposit' &&
     D.in(fv(c,'Close Date'), r)).length;
   const showRate  = pastCalls.length ? shows / pastCalls.length : 0;
@@ -1618,7 +1627,7 @@ function renderCalls() {
   const prevShowRate  = prevPastCalls.length ? prevShows / prevPastCalls.length : 0;
   const prevCloseRate = prevShows ? Math.min(prevCloses / prevShows, 1) : 0;
   const prevRev = DB.commissions
-    .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' && D.in(commDate(c), pr))
+    .filter(c => isRevenue(c) && D.in(commDate(c), pr))
     .reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
 
   document.getElementById('calls-kpis').innerHTML = [
@@ -1637,7 +1646,7 @@ function renderCalls() {
   // (DM / follow-up), so call-attribution alone badly undercounts a closer (e.g. Alen: 14 deals /
   // $35,975 in commissions vs 1 call-matched close). Shows / No-Shows / Booked still come from calls.
   const rangeComms = DB.commissions.filter(c =>
-    (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded' &&
+    isRevenue(c) &&
     (fv(c,'Payment Type')||'Full Payment') !== 'Deposit' &&
     D.in(fv(c,'Close Date'), r));
   const commByCloser = {}, commBySetter = {};
@@ -1982,34 +1991,24 @@ function renderRevenue() {
   const revLbl = document.getElementById('rev-range-label');
   if (revLbl) revLbl.textContent = fmtRangeLabel(r);
 
-  // Source of truth: Commissions table — only real Whop payments (must have Whop Payment ID)
-  // Use commDate() top-level helper (Close Date, falling back to record creation date)
-  const payments = DB.commissions
-    .filter(c => {
-      const amount = fv(c,'Deal Amount') || 0;
-      const whopId = fv(c,'Whop Payment ID') || '';
-      return amount > 0 && whopId.length > 0 && D.in(commDate(c), r);
-    })
-    .sort((a,b) => new Date(b.createdTime||0) - new Date(a.createdTime||0));
+  // Source of truth: Whop + Commas, read from the processors by server.py (all time), plus
+  // approved manual payments (wire, Zelle). Refunded money is out, whether the processor
+  // refunded it or the tracker marks it Refunded. Booked calls play no part.
+  const payments = DB.payments.filter(p => p.amount > 0 && D.in(p.date, r));   // newest first
 
-  const total    = payments.reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
+  const total    = payments.reduce((s,p) => s + p.amount, 0);
   const avgDeal  = payments.length > 0 ? total / payments.length : null;
   const byCloser = {};
-  payments.forEach(c => {
-    const cl = fv(c,'Closer') || 'Unassigned';
-    byCloser[cl] = (byCloser[cl]||0) + (fv(c,'Deal Amount')||0);
-  });
-  const byStatus = {};
-  payments.forEach(c => {
-    const st = fv(c,'Status') || 'Pending';
-    byStatus[st] = (byStatus[st]||0) + (fv(c,'Deal Amount')||0);
+  payments.forEach(p => {
+    const cl = p.closer || (p.status === 'History' ? 'Before tracker' : 'Unassigned');
+    byCloser[cl] = (byCloser[cl]||0) + p.amount;
   });
 
   document.getElementById('rev-kpis').innerHTML = [
     kpiCard({ label: 'Total Cash Collected', value: F.$(total), accent: true,
       goalPct: Math.min(total / CFG.goals.monthlyRev, 1), goalLabel: `of ${F.$(CFG.goals.monthlyRev)} goal` }),
-    kpiCard({ label: 'New Closes', value: payments.length, sub: `${F.$(total)} across ${payments.length} deals` }),
-    kpiCard({ label: 'Avg Deal Size', value: avgDeal != null ? F.$(Math.round(avgDeal)) : '—', sub: 'All Whop payments' }),
+    kpiCard({ label: 'Payments', value: payments.length, sub: `${F.$(total)} across ${payments.length} payments` }),
+    kpiCard({ label: 'Avg Payment', value: avgDeal != null ? F.$(Math.round(avgDeal)) : '—', sub: 'Whop + Commas + manual' }),
     kpiCard({ label: 'By Closer', value: F.$(total), accent: true,
       sub: Object.entries(byCloser).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${F.$(v)}`).join(' · ') || '—',
       tip: 'Total cash collected, broken down by closer' }),
@@ -2031,21 +2030,27 @@ function renderRevenue() {
   const chartEnd = (rangeMode === 'month')
     ? new Date(revToday.getFullYear(), revToday.getMonth() + 1, 0, 23, 59, 59, 999)
     : r.e;
+  // All Time starts at the first payment, not at the 2020 placeholder
+  const firstPay = payments.length ? new Date(payments[payments.length - 1].date + 'T00:00:00') : r.s;
+  const chartStart = rangeMode === 'all' ? firstPay : r.s;
   const allChartDays = [];
-  const revCur = new Date(r.s);
+  const revCur = new Date(chartStart);
   while (revCur <= chartEnd) { allChartDays.push(new Date(revCur)); revCur.setDate(revCur.getDate() + 1); }
-  const revDisplay = allChartDays.length > 180 ? allChartDays.filter((_,i) => i % Math.ceil(allChartDays.length/180) === 0) : allChartDays;
+  const revByDay = {};
+  payments.forEach(p => { revByDay[p.date] = (revByDay[p.date]||0) + p.amount; });
+  const step = allChartDays.length > 180 ? Math.ceil(allChartDays.length/180) : 1;
+  const revDisplay = allChartDays.filter((_,i) => i % step === 0);
   const revLabels = revDisplay.map(D.shortLabel);
-  let cumRev = 0;
+  let cumRev = 0, dayIdx = 0;
   const cumRevData = revDisplay.map(d => {
-    if (d > revToday) return null;
-    const dayRev = payments.filter(c => commDate(c) === D.key(d)).reduce((s,c) => s + (fv(c,'Deal Amount')||0), 0);
-    cumRev += dayRev; return cumRev;
+    // add every day up to this point, including days the sampling skipped
+    while (dayIdx < allChartDays.length && allChartDays[dayIdx] <= d) { cumRev += revByDay[D.key(allChartDays[dayIdx])] || 0; dayIdx++; }
+    return d > revToday ? null : cumRev;
   });
   const periodDays = allChartDays.length;
   const daysElapsed = allChartDays.filter(d => d <= revToday).length;
   const goalPaceLine = revDisplay.map(d => {
-    const dayN = Math.max(1, Math.round((d - r.s) / 86400000) + 1);
+    const dayN = Math.max(1, Math.round((d - chartStart) / 86400000) + 1);
     return Math.round((CFG.goals.monthlyRev / periodDays) * dayN);
   });
   mkChart('chart-rev-daily', 'line', revLabels, [
@@ -2066,20 +2071,21 @@ function renderRevenue() {
   if (revInsightEl && revInsights.length) revInsightEl.innerHTML = buildInsights(revInsights);
 
   if (!payments.length) {
-    document.getElementById('rev-tbody').innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:#374151;">No revenue data for this period.</td></tr>`;
+    document.getElementById('rev-tbody').innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:#374151;">No payments in Whop or Commas for this period.</td></tr>`;
     return;
   }
 
-  const STATUS_CLS = { 'Paid': 'badge-green', 'Approved': 'badge-blue', 'Pending': 'badge-amber' };
+  const STATUS_CLS = { 'Paid': 'badge-green', 'Approved': 'badge-blue', 'Pending': 'badge-amber', 'No tracker row yet': 'badge-red' };
+  const SOURCE_CLS = { 'Whop': 'badge-purple', 'Commas': 'badge-blue', 'Manual': 'badge-amber', 'Unverified': 'badge-red' };
 
-  document.getElementById('rev-tbody').innerHTML = payments.map(c => `
+  document.getElementById('rev-tbody').innerHTML = payments.map(p => `
     <tr>
-      <td style="color:#fff;font-weight:500;">${fv(c,'Lead Name') || '—'}</td>
-      <td>${D.fmt(commDate(c))}</td>
-      <td>${fv(c,'Closer') ? `<span class="badge badge-amber">${fv(c,'Closer')}</span>` : '<span class="badge badge-gray">—</span>'}</td>
-      <td><span class="badge ${STATUS_CLS[fv(c,'Status')]||'badge-gray'}">${fv(c,'Status')||'Pending'}</span></td>
-      <td class="r" style="font-weight:700; color:#f59e0b;">${F.$(fv(c,'Deal Amount')||0)}</td>
-      <td style="color:#374151; font-size:11.5px; font-family:monospace;">${(fv(c,'Whop Payment ID')||'—').slice(0,18)}</td>
+      <td style="color:#fff;font-weight:500;">${p.name || '—'}</td>
+      <td>${D.fmt(p.date)}</td>
+      <td>${p.closer ? `<span class="badge badge-amber">${p.closer}</span>` : '<span class="badge badge-gray">—</span>'}</td>
+      <td><span class="badge ${STATUS_CLS[p.status]||'badge-gray'}" ${p.status === 'History' ? 'title="Paid before the commission tracker started (Apr 1, 2026)"' : ''}>${p.status}</span></td>
+      <td class="r" style="font-weight:700; color:#f59e0b;">${F.$(p.amount)}</td>
+      <td style="white-space:nowrap;"><span class="badge ${SOURCE_CLS[p.source]||'badge-gray'}">${p.source}</span> <span style="color:#9ca3af; font-size:11.5px; font-family:monospace;" title="${p.id||''}">${(p.id||'').slice(0,18)}</span></td>
     </tr>`).join('');
 }
 
@@ -2178,7 +2184,7 @@ async function renderOptins() {
   // ── Source Conversion Funnels (Kit + Typeform) ─────────
   const paidEmails = new Set(
     DB.commissions
-      .filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded')
+      .filter(c => isRevenue(c))
       .map(c => (fv(c,'Lead Email')||'').toLowerCase()).filter(Boolean)
   );
   const isPaid = rec => paidEmails.has((fv(rec,'Email')||'').toLowerCase());
@@ -2684,6 +2690,15 @@ function renderLeaderboard() {
 // ═══════════════════════════════════════════════════════════
 // VIEW: COMMISSIONS
 // ═══════════════════════════════════════════════════════════
+// Where a commission row's money is, under its Close Date. Rows no payment backs say why
+// in red; they count toward neither revenue nor payouts.
+function payTag(rec) {
+  const p = rec.pay;
+  if (!p) return '';
+  if (p.flag) return `<div style="font-size:10.5px; color:${p.excluded ? '#f87171' : '#fbbf24'}; margin-top:2px; white-space:normal; max-width:170px;">${p.excluded ? 'Not counted: ' : ''}${p.flag}</div>`;
+  return p.source ? `<div style="font-size:10.5px; color:#9ca3af; margin-top:2px;">${p.source}</div>` : '';
+}
+
 function calcComm(deal, setter, closer, aiSetter) {
   // AI Setter (IG DM — AI chat bot handles convo): 2.5% setter + 10% closer
   // Normal: 5% setter + 10% closer
@@ -2813,7 +2828,7 @@ function refreshCommPayoutSummary() {
       if (setter === rep) earned += sAmt;
       if (closer === rep) earned += cAmt;
       if (!earned) return;
-      if (status === 'Refunded') return;
+      if (status === 'Refunded' || rec.pay?.excluded) return;
       if (isDeposit) { totalOnHold += earned; return; }
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
@@ -2969,7 +2984,7 @@ function renderCommissions() {
 
     return `<tr data-rid="${rid}" style="background:${glow.bg}; ${isDeposit ? 'opacity:0.75;' : isRefunded ? 'opacity:0.6;' : ''}">
       <td style="border-left:3px solid ${glow.accent}; color:#d1d5db; font-weight:500; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${f['Lead Name']||'—'}</td>
-      <td style="color:#6b7280; white-space:nowrap;">${f['Close Date']||'—'}</td>
+      <td style="color:#6b7280; white-space:nowrap;">${f['Close Date']||'—'}${payTag(rec)}</td>
       <td class="r" style="color:#fff; font-weight:700; white-space:nowrap;">${F.$(deal)}</td>
       <td style="white-space:nowrap;">
         <select class="comm-sel ${isDeposit?'unclaimed':''}" data-field="Payment Type" style="max-width:110px;">
@@ -3012,7 +3027,7 @@ function renderCommissions() {
   const commExportBtn = document.getElementById('comm-export-btn');
   if (commExportBtn) {
     commExportBtn.onclick = () => {
-      const rows = filtered.map(({ f, deal, setter, closer, comm }) => ({
+      const rows = filtered.map(({ rec, f, deal, setter, closer, comm }) => ({
         'Lead Name':     f['Lead Name'] || '',
         'Close Date':    f['Close Date'] || '',
         'Deal Amount':   deal,
@@ -3024,7 +3039,9 @@ function renderCommissions() {
         'Total Comm':    comm.total,
         'Status':        f['Status'] || 'Pending',
         'Pay Period':    f['Pay Period'] || '',
-        'Whop ID':       f['Whop Payment ID'] || '',
+        'Payment ID':    f['Whop Payment ID'] || '',
+        'Paid Via':      rec.pay?.source || '',
+        'Counted':       rec.pay ? (rec.pay.counts ? 'Yes' : (rec.pay.flag || 'No')) : '',
       }));
       downloadCSV(rows, `commissions-${new Date().toISOString().slice(0,10)}.csv`);
     };
@@ -3232,12 +3249,22 @@ async function renderHealth() {
         ? `${failing[0][0]} is not syncing: ${failing[0][1].error}`.slice(0, 120)
         : !h.ready ? 'Server is re-reading Airtable after a restart'
         : `${(h.records || 0).toLocaleString('en-US')} records cached · last pull ${ageMin < 1 ? 'under a minute' : ageMin + ' min'} ago` });
+    // 1b. Payment processors: revenue and commissions come from Whop + Commas directly
+    const pr = h.processors || {};
+    if (pr.configured) {
+      const age = pr.fetchedAt ? Math.floor((Date.now() - new Date(pr.fetchedAt)) / 60000) : null;
+      const problems = [...(pr.missingRows || []).map(x => 'Payment with no tracker row: ' + x), ...(pr.flaggedRows || [])];
+      checks.push({ name: 'Whop + Commas', ok: pr.loaded && !pr.error && !pr.held && !problems.length && age !== null && age <= 40,
+        detail: pr.error || pr.held
+          || (problems.length ? problems[0] + (problems.length > 1 ? ` (+${problems.length - 1} more)` : '')
+          : `${pr.whop} Whop + ${pr.commas} Commas payments, tracker matches · checked ${age < 1 ? 'under a minute' : age + ' min'} ago`) });
+    }
   } catch (e) {
     checks.push({ name: 'Airtable Sync', ok: false, detail: 'Unable to reach the dashboard server' });
   }
 
   // 2. Whop data freshness — check via commissions table (avoids exposing Whop API key in browser)
-  const whopPays = DB.commissions.filter(c => (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded');
+  const whopPays = DB.commissions.filter(c => isRevenue(c));
   const lastWhopDate = whopPays.map(c => fv(c,'Close Date')).filter(Boolean).sort().reverse()[0] || null;
   const whopDaysAgo = lastWhopDate ? Math.floor((Date.now() - new Date(lastWhopDate)) / 86400000) : null;
   checks.push({ name: 'Whop Payments in DB', ok: whopPays.length > 0,

@@ -397,6 +397,7 @@ def tick():
                 continue
             t.busy, t.op_full, t.want_full = True, full, False
         OP_POOL.submit(run_op, t, full)
+    tick_processors(now)
 
 
 def scheduler():
@@ -420,6 +421,8 @@ def note_activity():
             with DATA_LOCK:
                 for t in TABLES.values():
                     t.next_at = 0
+            with LEDGER_LOCK:
+                LEDGER['want'] = True
             WAKE.set()
 
 
@@ -446,6 +449,8 @@ def request_refresh(timeout=20.0):
             t.next_at = 0
             if t.shards == 1:
                 t.want_full = True
+    with LEDGER_LOCK:
+        LEDGER['want'] = True
     WAKE.set()
     deadline = req + timeout
     with SYNC_DONE:
@@ -453,8 +458,12 @@ def request_refresh(timeout=20.0):
             pending = [t for t in TABLES.values() if waitable(t) and t.done_started < req]
             left = deadline - time.time()
             if not pending or left <= 0:
-                return [t.key for t in pending]
+                break
             SYNC_DONE.wait(left)
+    with PROC_DONE:
+        while (WHOP_KEY or COMMAS_KEY) and LEDGER['done_started'] < req and time.time() < deadline:
+            PROC_DONE.wait(max(0.1, deadline - time.time()))
+    return [t.key for t in pending]
 
 
 def all_loaded():
@@ -524,6 +533,8 @@ def payload():
             # Insertion order = Airtable's own order (full syncs rebuild it; new rows append),
             # so anything in the page that takes the first match behaves as before.
             tables = {k: [r for r in t.records.values() if t.in_window(r)] for k, t in TABLES.items()}
+        tables['commissions'] = annotate_commissions(tables['commissions'])
+        tables['payments'] = revenue_payments(tables['commissions'])
         raw = json.dumps({'version': key, 'tables': tables}, separators=(',', ':')).encode()
         PAYLOAD.update(key=key, raw=raw, gz=gzip.compress(raw, 6))
         return PAYLOAD
@@ -568,6 +579,394 @@ def platform_stats():
     if start:
         threading.Thread(target=_fetch_stats, daemon=True).start()
     return data
+
+
+# ───────────────────────────────────────────────────────────── payment processors
+#
+# Revenue and commissions come from Whop and Commas, never from booked calls.
+# LEDGER holds every real payment (paid, at least $2, net of refunds). Commission rows
+# in Airtable hold the human part (setter, closer, payout status); reconcile() keeps
+# their amount, date and refund status equal to the processor's, creates a row for any
+# payment that has none, and annotate_commissions() flags rows no payment backs.
+
+WHOP_KEY = os.environ.get('WHOP_API_KEY', '')
+COMMAS_KEY = os.environ.get('COMMAS_API_KEY', '')
+TRACKER_START = '2026-04-01'     # earlier payments are revenue history only, never commission rows
+MANUAL_PREFIXES = ('WIRE-', 'ZELLE-', 'MANUAL-', 'CASH-', 'CHECK-')   # off-processor payments Loic approved
+ROW_GRACE = 10 * 60              # n8n's webhook gets 10 min to create the row first (it prefills setter/closer)
+UNKNOWN_GRACE = 60 * 60          # a new row whose id Whop/Commas don't list yet counts for 1h, then is flagged
+PROC_ACTIVE_EVERY = 5 * 60
+PROC_IDLE_EVERY = 30 * 60
+WHOP_FULL_EVERY = 60 * 60        # the 2 newest pages every run, all pages hourly (catches late refunds)
+RECONCILE_WRITE = os.environ.get('RECONCILE_WRITE', '1') != '0'      # 0 = log what it would change, write nothing
+MAX_WRITES = 40                  # per run; a bigger diff means something is off, so it waits for a human
+ZERO_COMM = {'Setter Commission %': 0, 'Setter Commission $': 0, 'Closer Commission %': 0,
+             'Closer Commission $': 0, 'Total Commission $': 0}
+
+try:
+    from zoneinfo import ZoneInfo
+    BIZ_TZ = ZoneInfo('America/Chicago')
+except Exception:
+    BIZ_TZ = None
+
+
+def biz_date(ts):
+    """Calendar date of a UTC timestamp in US Central, the zone Commas dates payments in."""
+    dt = datetime.fromtimestamp(ts, timezone.utc)
+    if BIZ_TZ is not None:
+        return dt.astimezone(BIZ_TZ).date().isoformat()
+    # No tz database: US DST runs from the 2nd Sunday of March to the 1st Sunday of November, 2am local.
+    mar = datetime(dt.year, 3, 8, 8, tzinfo=timezone.utc)
+    mar += timedelta(days=(6 - mar.weekday()) % 7)
+    nov = datetime(dt.year, 11, 1, 7, tzinfo=timezone.utc)
+    nov += timedelta(days=(6 - nov.weekday()) % 7)
+    return (dt - timedelta(hours=5 if mar <= dt < nov else 6)).date().isoformat()
+
+
+LEDGER = {'payments': {}, 'loaded': False, 'whop_full_at': 0.0, 'fetched_at': 0.0, 'next_at': 0.0,
+          'busy': False, 'want': False, 'done_started': 0.0, 'error': None, 'reconcile': None, 'emails': {}}
+LEDGER_LOCK = threading.Lock()
+PROC_DONE = threading.Condition()
+PROC_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix='proc')
+
+
+def http_json(url, headers, timeout=60):
+    req = urllib.request.Request(url, headers=dict(headers, **{'User-Agent': 'is8-kpi-dashboard', 'Accept': 'application/json'}))
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def fetch_whop(full):
+    out, page = {}, 1
+    while True:
+        d = http_json('https://api.whop.com/api/v2/payments?per=50&page=%d' % page, {'Authorization': 'Bearer ' + WHOP_KEY})
+        for w in d.get('data') or []:
+            out[w['id']] = w
+        last = (d.get('pagination') or {}).get('total_page') or 1
+        if page >= last or (not full and page >= 2):
+            return out
+        page += 1
+
+
+def whop_entry(w):
+    gross = float(w.get('final_amount') or 0)
+    if w.get('status') != 'paid' or gross < 2:
+        return None
+    refunded = float(w.get('refunded_amount') or 0)
+    ts = w.get('paid_at') or w.get('created_at') or time.time()
+    return {'id': w['id'], 'source': 'Whop', 'ts': ts, 'date': biz_date(ts), 'gross': gross,
+            'refunded': refunded, 'net': round(gross - refunded, 2),
+            'name': ('%s %s' % (w.get('billing_first_name') or '', w.get('billing_last_name') or '')).strip(),
+            'email': None, 'membership': w.get('membership')}
+
+
+def fetch_commas():
+    out, page = [], 1
+    while True:
+        d = http_json('https://www.fanbasis.com/public-api/checkout-sessions/transactions?page=%d&per_page=100' % page,
+                      {'x-api-key': COMMAS_KEY})
+        data = d.get('data') or {}
+        out.extend(data.get('transactions') or [])
+        if not (data.get('pagination') or {}).get('has_more'):
+            return out
+        page += 1
+
+
+def commas_entry(t):
+    gross = float(t.get('amount') or 0)
+    if gross < 2:
+        return None    # $1 card checks, not deals
+    refunds = [r for r in (t.get('refunds') or []) if isinstance(r, dict)]
+    refunded = sum(float(r.get('amount') or r.get('refund_amount') or 0) for r in refunds)
+    if t.get('refunds') and not refunded:
+        refunded = gross   # refund listed without an amount: treat as full
+    ts = datetime.fromisoformat(t['transaction_date'][:19]).replace(tzinfo=timezone.utc).timestamp()
+    fan = t.get('fan') or {}
+    return {'id': t.get('public_transaction_id') or str(t.get('id')), 'source': 'Commas', 'ts': ts,
+            'date': biz_date(ts), 'gross': gross, 'refunded': refunded, 'net': round(gross - refunded, 2),
+            'name': (fan.get('name') or '').strip(), 'email': (fan.get('email') or '').lower() or None,
+            'membership': None}
+
+
+def sync_processors():
+    errors, whop, commas = [], None, None
+    full = not LEDGER['loaded'] or time.time() - LEDGER['whop_full_at'] > WHOP_FULL_EVERY
+    if WHOP_KEY:
+        try:
+            whop = fetch_whop(full)
+        except Exception as e:
+            errors.append('Whop: %s' % str(e)[:150])
+    if COMMAS_KEY:
+        try:
+            commas = fetch_commas()
+        except Exception as e:
+            errors.append('Commas: %s' % str(e)[:150])
+    with LEDGER_LOCK:
+        pays = dict(LEDGER['payments'])
+        if whop is not None:
+            if full:
+                pays = {k: v for k, v in pays.items() if v['source'] != 'Whop'}
+                LEDGER['whop_full_at'] = time.time()
+            for wid, w in whop.items():
+                e = whop_entry(w)
+                if e:
+                    pays[wid] = e
+                else:
+                    pays.pop(wid, None)
+        if commas is not None:
+            pays = {k: v for k, v in pays.items() if v['source'] != 'Commas'}
+            for t in commas:
+                e = commas_entry(t)
+                if e:
+                    pays[e['id']] = e
+        changed = pays != LEDGER['payments']
+        LEDGER['payments'] = pays
+        if (whop is not None or not WHOP_KEY) and (commas is not None or not COMMAS_KEY):
+            LEDGER['loaded'] = True
+        if not errors:
+            LEDGER['fetched_at'] = time.time()
+        LEDGER['error'] = '; '.join(errors) or None
+    if changed:
+        with DATA_LOCK:
+            bump()
+    if errors:
+        log('[proc] ' + '; '.join(errors))
+
+
+def whop_email(membership):
+    if not membership or not WHOP_KEY:
+        return None
+    cache = LEDGER['emails']
+    if membership not in cache:
+        try:
+            m = http_json('https://api.whop.com/api/v2/memberships/' + membership, {'Authorization': 'Bearer ' + WHOP_KEY})
+            cache[membership] = (m.get('email') or '').lower() or None
+        except Exception:
+            return None
+    return cache[membership]
+
+
+def commission_math(f, amount):
+    """Commission dollars from the row's own percentages, the way the tracker computes them."""
+    s = float(f.get('Setter Commission %') or 0)
+    c = float(f.get('Closer Commission %') or 0)
+    return {'Setter Commission $': round(amount * s / 100, 2), 'Closer Commission $': round(amount * c / 100, 2),
+            'Total Commission $': round(amount * (s + c) / 100, 2)}
+
+
+def reconcile():
+    """Make the Commissions table match Whop + Commas from TRACKER_START on."""
+    t = TABLES['commissions']
+    with LEDGER_LOCK:
+        if not LEDGER['loaded'] or LEDGER['error']:
+            return None   # never act on a partial picture
+        pays = dict(LEDGER['payments'])
+    with DATA_LOCK:
+        if not t.loaded:
+            return None
+        rows = list(t.records.values())
+    by_pid = {}
+    for r in rows:
+        pid = ((r.get('fields') or {}).get('Whop Payment ID') or '').strip()
+        if pid:
+            by_pid.setdefault(pid, []).append(r)
+    now, today = time.time(), biz_date(time.time())
+    creates, patches = [], []
+    for pid, p in sorted(pays.items(), key=lambda kv: kv[1]['ts']):
+        if p['date'] < TRACKER_START:
+            continue
+        rs = by_pid.get(pid)
+        if not rs:
+            if p['net'] > 0 and now - p['ts'] > ROW_GRACE:
+                creates.append(p)
+            continue
+        f = rs[0].get('fields') or {}
+        upd, why = {}, []
+        if p['net'] > 0:
+            if abs(float(f.get('Deal Amount') or 0) - p['net']) > 0.005:
+                upd['Deal Amount'] = p['net']
+                why.append('amount $%s (was $%s)' % (p['net'], f.get('Deal Amount')))
+                if f.get('Status') != 'Refunded':
+                    upd.update(commission_math(f, p['net']))
+        elif f.get('Status') != 'Refunded':
+            upd['Status'] = 'Refunded'
+            upd.update(ZERO_COMM)
+            why.append('refunded $%s' % p['refunded'])
+        if f.get('Close Date') != p['date']:
+            upd['Close Date'] = p['date']
+            why.append('date %s (was %s)' % (p['date'], f.get('Close Date')))
+        if upd:
+            note = (f.get('Notes') or '').strip()
+            upd['Notes'] = (note + '\n' if note else '') + '%s: synced from %s: %s.' % (today, p['source'], ', '.join(why))
+            patches.append((rs[0]['id'], f.get('Lead Name'), upd))
+    summary = {'at': now, 'created': [], 'updated': [], 'held': None}
+    if len(creates) + len(patches) > MAX_WRITES:
+        summary['held'] = '%d creates and %d updates exceed the %d-write safety cap; nothing written' % (len(creates), len(patches), MAX_WRITES)
+        log('[reconcile] ' + summary['held'])
+        return summary
+    for p in creates:
+        email = p['email'] or whop_email(p['membership'])
+        fields = {'Lead Name': p['name'] or '(no name on payment)', 'Deal Amount': p['net'], 'Close Date': p['date'],
+                  'Whop Payment ID': p['id'], 'Status': 'Pending', 'AI Setter': False,
+                  'Notes': '%s: created from the %s payment by the dashboard (no tracker row existed). Assign Setter/Closer.' % (today, p['source'])}
+        fields.update(ZERO_COMM)
+        if email:
+            fields['Lead Email'] = email
+        summary['created'].append('%s $%s %s %s' % (fields['Lead Name'], p['net'], p['date'], p['id']))
+        if RECONCILE_WRITE:
+            rec = airtable('POST', '/v0/%s/%s' % (BASE_ID, t.id), {'fields': fields, 'typecast': True}, attempts=3)
+            cache_write(t, rec)
+    for rid, name, upd in patches:
+        summary['updated'].append('%s: %s' % (name, upd['Notes'].rsplit('\n', 1)[-1]))
+        if RECONCILE_WRITE:
+            rec = airtable('PATCH', '/v0/%s/%s/%s' % (BASE_ID, t.id, rid), {'fields': upd, 'typecast': True}, attempts=3)
+            cache_write(t, rec)
+    for line in summary['created']:
+        log('[reconcile] %screated %s' % ('' if RECONCILE_WRITE else 'WOULD HAVE ', line))
+    for line in summary['updated']:
+        log('[reconcile] %supdated %s' % ('' if RECONCILE_WRITE else 'WOULD HAVE ', line))
+    return summary
+
+
+def cache_write(t, rec):
+    if t.fields:
+        rec['fields'] = {k: v for k, v in (rec.get('fields') or {}).items() if k in t.fields}
+    with DATA_LOCK:
+        t.local_writes[rec['id']] = time.time()
+        t.records[rec['id']] = rec
+        bump()
+
+
+def run_processors():
+    started = time.time()
+    try:
+        sync_processors()
+        summary = reconcile()
+        if summary is not None:
+            with LEDGER_LOCK:
+                LEDGER['reconcile'] = summary
+    except Exception as e:
+        with LEDGER_LOCK:
+            LEDGER['error'] = str(e)[:200]
+        log('[proc] FAILED: %s' % str(e)[:200])
+    finally:
+        with LEDGER_LOCK:
+            LEDGER['busy'] = False
+            LEDGER['done_started'] = started
+            every = PROC_ACTIVE_EVERY if is_active() else PROC_IDLE_EVERY
+            LEDGER['next_at'] = time.time() + (min(60, every) if LEDGER['error'] else every)
+        with PROC_DONE:
+            PROC_DONE.notify_all()
+
+
+def tick_processors(now):
+    if not (WHOP_KEY or COMMAS_KEY):
+        return
+    with LEDGER_LOCK:
+        if LEDGER['busy'] or not (LEDGER['want'] or now >= LEDGER['next_at']):
+            return
+        LEDGER['busy'], LEDGER['want'] = True, False
+    PROC_POOL.submit(run_processors)
+
+
+def created_ts(r):
+    try:
+        return datetime.fromisoformat((r.get('createdTime') or '').replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def annotate_commissions(rows):
+    """Each commission row gets `pay`: where its money is (Whop, Commas, Manual), whether it
+    counts as revenue, and why not. Amount, date and refunds shown are the processor's."""
+    with LEDGER_LOCK:
+        loaded, pays = LEDGER['loaded'], LEDGER['payments']
+    now, seen, out, unknown = time.time(), set(), [], False
+    for r in rows:
+        f = r.get('fields') or {}
+        pid = (f.get('Whop Payment ID') or '').strip()
+        amount_ok = float(f.get('Deal Amount') or 0) > 0
+        p = pays.get(pid) if pid else None
+        pay = {'source': None, 'counts': False}
+        if pid and pid in seen:
+            pay.update(excluded=True, flag='Second row for the same payment: not counted again')
+        elif not loaded:
+            # Processors not reachable since boot: fall back to the tracker's own fields.
+            pay.update(source='Unverified', counts=bool(pid) and f.get('Status') != 'Refunded' and amount_ok)
+        elif p:
+            f = dict(f, **{'Close Date': p['date']})
+            if p['net'] > 0:
+                f['Deal Amount'] = p['net']
+            else:
+                f['Status'] = 'Refunded'
+            pay.update(source=p['source'], counts=p['net'] > 0 and f.get('Status') != 'Refunded')
+        elif pid.upper().startswith(MANUAL_PREFIXES):
+            pay.update(source='Manual', counts=f.get('Status') != 'Refunded' and amount_ok)
+        elif pid and now - created_ts(r) < UNKNOWN_GRACE:
+            unknown = True
+            pay.update(source='Unverified', counts=f.get('Status') != 'Refunded' and amount_ok,
+                       flag='Waiting for Whop or Commas to list this payment')
+        else:
+            pay.update(excluded=True, flag='No payment with this ID in Whop or Commas' if pid else 'No payment ID')
+        if pid:
+            seen.add(pid)
+        out.append({'id': r['id'], 'createdTime': r.get('createdTime'), 'fields': f, 'pay': pay})
+    if unknown:
+        with LEDGER_LOCK:
+            LEDGER['want'] = True    # a row n8n just wrote: ask the processors now instead of in 5 min
+        WAKE.set()
+    return out
+
+
+def revenue_payments(annotated):
+    """Every payment that counts as revenue, all time, straight from the processors, plus
+    approved manual payments. Joined to its tracker row for closer, setter and status."""
+    with LEDGER_LOCK:
+        loaded, pays = LEDGER['loaded'], dict(LEDGER['payments'])
+    rows = {}
+    for r in annotated:
+        pid = (r['fields'].get('Whop Payment ID') or '').strip()
+        if pid and pid not in rows:
+            rows[pid] = r
+    out = []
+    for pid, p in (pays.items() if loaded else []):
+        r = rows.get(pid)
+        f = r['fields'] if r else {}
+        if p['net'] <= 0 or f.get('Status') == 'Refunded':   # tracker Refunded = refunded outside the processor
+            continue
+        out.append({'id': pid, 'source': p['source'], 'date': p['date'], 'amount': p['net'],
+                    'name': f.get('Lead Name') or p['name'], 'closer': f.get('Closer'), 'setter': f.get('Setter'),
+                    'status': f.get('Status') or ('History' if p['date'] < TRACKER_START else 'No tracker row yet')})
+    for r in annotated:
+        if r['pay']['counts'] and r['pay']['source'] in ('Manual', 'Unverified'):
+            f = r['fields']
+            out.append({'id': f.get('Whop Payment ID'), 'source': r['pay']['source'], 'date': f.get('Close Date'),
+                        'amount': float(f.get('Deal Amount') or 0), 'name': f.get('Lead Name'),
+                        'closer': f.get('Closer'), 'setter': f.get('Setter'), 'status': f.get('Status') or 'Pending'})
+    out.sort(key=lambda x: (x['date'] or '', x['id'] or ''), reverse=True)
+    return out
+
+
+def processor_health(annotated):
+    with LEDGER_LOCK:
+        L = dict(LEDGER)
+        pays = dict(LEDGER['payments'])
+    ids = {(r['fields'].get('Whop Payment ID') or '').strip() for r in annotated}
+    now = time.time()
+    missing = [p for p in pays.values() if p['date'] >= TRACKER_START and p['net'] > 0
+               and p['id'] not in ids and now - p['ts'] > ROW_GRACE]
+    flagged = [r for r in annotated if r['pay'].get('excluded')]
+    rec = L['reconcile'] or {}
+    return {
+        'loaded': L['loaded'], 'configured': bool(WHOP_KEY or COMMAS_KEY), 'error': L['error'],
+        'fetchedAt': datetime.fromtimestamp(L['fetched_at'], timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ') if L['fetched_at'] else None,
+        'whop': sum(1 for p in pays.values() if p['source'] == 'Whop'),
+        'commas': sum(1 for p in pays.values() if p['source'] == 'Commas'),
+        'missingRows': ['%s $%s %s' % (p['name'], p['net'], p['date']) for p in missing][:10],
+        'flaggedRows': ['%s: %s' % (r['fields'].get('Lead Name'), r['pay']['flag']) for r in flagged][:10],
+        'held': rec.get('held'),
+        'lastChanges': (rec.get('created') or []) + (rec.get('updated') or []),
+    }
 
 
 # ───────────────────────────────────────────────────────────── auth
@@ -806,6 +1205,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             'records': sum(v['records'] for v in tables.values()),
             'tables': tables,
             'airtableError': AT_STATUS['last_error'],
+            'processors': processor_health(annotate_commissions(list(TABLES['commissions'].records.values()))),
         })
 
 
@@ -817,6 +1217,9 @@ class Server(http.server.ThreadingHTTPServer):
 def boot():
     if not TOKEN:
         log('[boot] AIRTABLE_TOKEN is not set; the dashboard cannot load data')
+    if not (WHOP_KEY and COMMAS_KEY):
+        log('[boot] WHOP_API_KEY / COMMAS_API_KEY missing: revenue falls back to the tracker rows unverified')
+    log('[boot] tracker reconcile %s' % ('ON (writes to Airtable)' if RECONCILE_WRITE else 'DRY RUN (logs only)'))
     threading.Thread(target=scheduler, name='scheduler', daemon=True).start()
     t0 = time.monotonic()
 
