@@ -670,7 +670,7 @@
           </select>
           <select id="comm-rep" class="filter-select">
             <option value="">All Reps</option>
-            <option>Max</option><option>Will</option><option>Alen</option><option>Callum</option><option>Quinn</option><option>Luke</option><option>Zane</option>
+            <option>Max</option><option>Will</option><option>Alen</option><option>Callum</option><option>Quinn</option><option>Zane</option>
           </select>
           <select id="comm-status" class="filter-select">
             <option value="">All Statuses</option>
@@ -1191,6 +1191,13 @@ function isRevenue(c) {
   return (fv(c,'Whop Payment ID')||'').length > 0 && fv(c,'Status') !== 'Refunded';
 }
 
+// Reps who left. Their past deals keep their name, so commission history and anything still owed
+// stay correct, but they are off every roster, leaderboard, dial chart and filter. They show in
+// the payout summary only while they have commission in the selected period.
+// Ben fired 2026-08, Luke removed 2026-10-15.
+const FORMER_REPS = ['Ben', 'Luke'];
+const isCurrentRep = name => !!name && !FORMER_REPS.includes(name);
+
 // Shared close-date helper — used in Scorecard, Calls, Revenue, Health
 function commDate(c) {
   return fv(c,'Close Date') || (c.createdTime || '').split('T')[0];
@@ -1668,6 +1675,7 @@ function renderCalls() {
   });
   Object.entries(commByCloser).forEach(([cl, d]) => { const s = ensureCloser(cl); s.closes = d.closes; s.rev = d.rev; });
   const closerRows = Object.entries(closerStats)
+    .filter(([name]) => isCurrentRep(name))
     .sort((a,b) => b[1].rev - a[1].rev)
     .map(([name, d]) => [
       name,
@@ -1689,6 +1697,7 @@ function renderCalls() {
   });
   Object.entries(commBySetter).forEach(([st, d]) => { const s = ensureSetter(st); s.closes = d.closes; s.rev = d.rev; });
   const setterRows = Object.entries(setterStats)
+    .filter(([name]) => isCurrentRep(name))
     .sort((a,b) => b[1].rev - a[1].rev || b[1].booked - a[1].booked)
     .map(([name, d]) => [
       name,
@@ -1909,7 +1918,7 @@ function renderDials() {
   // UX-14: Populate member dropdown dynamically from DB (once)
   const memberEl = document.getElementById('dials-member');
   if (memberEl && memberEl.options.length <= 1) {
-    const members = [...new Set(DB.callLog.map(d => fv(d,'Team Member')).filter(Boolean))].sort();
+    const members = [...new Set(DB.callLog.map(d => fv(d,'Team Member')).filter(isCurrentRep))].sort();
     members.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; memberEl.appendChild(o); });
     if (member) memberEl.value = member;
   }
@@ -1948,7 +1957,6 @@ function renderDials() {
     { name: 'Will',   color: '#10b981' },
     { name: 'Alen',   color: '#8b5cf6' },
     { name: 'Callum', color: '#3b82f6' },
-    { name: 'Luke',   color: '#ec4899' },
     { name: 'Quinn',  color: '#14b8a6' },
     { name: 'Zane',   color: '#f97316' },
   ];
@@ -2570,12 +2578,12 @@ function renderLeaderboard() {
   // All leaderboard stats derived purely from Commissions (source of truth)
   const comms = DB.commissions.filter(c => {
     const isDeposit = (fv(c,'Payment Type') || 'Full Payment') === 'Deposit';
-    return !isDeposit && D.in(fv(c,'Close Date'), r);
+    return isRevenue(c) && !isDeposit && D.in(fv(c,'Close Date'), r);
   });
 
   // Derive closer/setter lists dynamically from commission data (don't hardcode names)
-  const CLOSERS = [...new Set(DB.commissions.map(c => fv(c,'Closer')).filter(Boolean))].sort();
-  const SETTERS = [...new Set(DB.commissions.map(c => fv(c,'Setter')).filter(Boolean))].sort();
+  const CLOSERS = [...new Set(DB.commissions.map(c => fv(c,'Closer')).filter(isCurrentRep))].sort();
+  const SETTERS = [...new Set(DB.commissions.map(c => fv(c,'Setter')).filter(isCurrentRep))].sort();
   if (!CLOSERS.length) CLOSERS.push('Will','Alen','Max'); // fallback if no data
 
   const closerStats = CLOSERS.map(name => {
@@ -2801,7 +2809,7 @@ function openDispositionModal() {
 
 function refreshCommPayoutSummary() {
   const filterPeriod = document.getElementById('comm-period')?.value || '';
-  const REP_ROLES = { Max:'Setter + Closer', Will:'Closer', Alen:'Closer', Callum:'Setter', Quinn:'Setter', Luke:'Setter', Zane:'Setter' };
+  const REP_ROLES = { Max:'Setter + Closer', Will:'Closer', Alen:'Closer', Callum:'Setter', Quinn:'Setter', Zane:'Setter' };
   // Active roster + anyone already in the commission data (so a fired rep's outstanding payout is
   // never hidden — they only render a row if they actually have earnings).
   const dataReps = [...new Set(DB.commissions.flatMap(c => [fv(c,'Setter'), fv(c,'Closer')]).filter(Boolean))];
@@ -2950,9 +2958,9 @@ function renderCommissions() {
     return opts.map(o => `<option value="${o}" ${o===current?'selected':''}>${o||'—'}</option>`).join('');
   }
 
-  // Active roster. Setters: Max (also closer), Callum, Quinn, Luke (Ben fired 2026-08). Fired reps
+  // Active roster. Setters: Max (also closer), Callum, Quinn, Zane (Ben fired 2026-08, Luke 2026-10). Fired reps
   // stay attributed on their historical deals via selOpts, just aren't offered for new assignment.
-  const SETTER_OPTS    = ['', 'Max', 'Callum', 'Quinn', 'Luke', 'Zane'];
+  const SETTER_OPTS    = ['', 'Max', 'Callum', 'Quinn', 'Zane'];
   const CLOSER_OPTS    = ['', 'Max', 'Will', 'Alen'];
   const STATUS_OPTS         = ['Pending', 'Approved', 'Paid', 'Refunded'];
   const DEPOSIT_STATUS_OPTS = ['Pending', 'Approved', 'Paid', 'Refunded'];
