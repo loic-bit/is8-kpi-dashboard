@@ -845,7 +845,8 @@ function applyData(body) {
     return name.includes('test') || email.includes('test');
   };
   DB.calls       = (t.calls || []).filter(r => !isTest(r));
-  DB.callLog     = t.callLog || [];
+  // Former reps' dials are dropped entirely: dials carry no money, so nothing is lost.
+  DB.callLog     = (t.callLog || []).filter(r => !FORMER_REPS.includes(fv(r,'Team Member')));
   DB.meta        = t.meta || [];
   DB.optins      = (t.optins || []).filter(r => !isTest(r));
   DB.commissions = (t.commissions || []).filter(r => !isTest(r));
@@ -2820,7 +2821,7 @@ function refreshCommPayoutSummary() {
     : DB.commissions;
 
   const repPayoutRows = REPS.map(rep => {
-    let totalSetter = 0, totalCloser = 0, totalApproved = 0, totalPaid = 0, totalOnHold = 0;
+    let totalSetter = 0, totalCloser = 0, totalApproved = 0, totalPaid = 0, totalOnHold = 0, owed = 0;
     source.forEach(rec => {
       const f = rec.fields || {};
       const setter    = f['Setter'] || '';
@@ -2837,6 +2838,7 @@ function refreshCommPayoutSummary() {
       if (closer === rep) earned += cAmt;
       if (!earned) return;
       if (status === 'Refunded' || rec.pay?.excluded) return;
+      if (status !== 'Paid') owed += earned;
       if (isDeposit) { totalOnHold += earned; return; }
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
@@ -2844,9 +2846,9 @@ function refreshCommPayoutSummary() {
     });
     const grandTotal = totalSetter + totalCloser;
     // Active roster reps ALWAYS render (even at $0) so new hires are visible immediately;
-    // former reps (data-only, e.g. Ben) render only while money is still owed/attributed.
+    // former reps (Ben, Luke) render only while they are still owed (Pending, Approved or on hold).
     const isActiveRep = rep in REP_ROLES;
-    if (!isActiveRep && grandTotal === 0 && totalOnHold === 0) return null;
+    if (!isActiveRep && owed === 0) return null;
     return `<tr>
       <td style="font-weight:700;color:#fff;">${rep}</td>
       <td style="color:#6b7280;font-size:12px;">${REP_ROLES[rep]||'Former rep'}</td>
