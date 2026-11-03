@@ -2708,6 +2708,14 @@ function payTag(rec) {
   return p.source ? `<div style="font-size:10.5px; color:#9ca3af; margin-top:2px;">${p.source}</div>` : '';
 }
 
+// A deposit's commission waits until someone approves it. Approved means payable now (that is
+// what the Approved status is for) and Paid means it was paid out, so only a Pending deposit is
+// on hold. Refunded deposits are handled as refunds, not holds.
+function isHeldDeposit(f) {
+  return (f['Payment Type'] || 'Full Payment') === 'Deposit'
+    && !['Approved', 'Paid', 'Refunded'].includes(f['Status'] || 'Pending');
+}
+
 function calcComm(deal, setter, closer, aiSetter) {
   // AI Setter (IG DM — AI chat bot handles convo): 2.5% setter + 10% closer
   // Normal: 5% setter + 10% closer
@@ -2826,7 +2834,6 @@ function refreshCommPayoutSummary() {
       const f = rec.fields || {};
       const setter    = f['Setter'] || '';
       const closer    = f['Closer'] || '';
-      const isDeposit = (f['Payment Type'] || 'Full Payment') === 'Deposit';
       const status    = f['Status'] || 'Pending';
       const deal      = parseFloat(f['Deal Amount'] || 0);
       const aiSet     = !!f['AI Setter'];
@@ -2839,7 +2846,7 @@ function refreshCommPayoutSummary() {
       if (!earned) return;
       if (status === 'Refunded' || rec.pay?.excluded) return;
       if (status !== 'Paid') owed += earned;
-      if (isDeposit) { totalOnHold += earned; return; }
+      if (isHeldDeposit(f)) { totalOnHold += earned; return; }
       if (setter === rep) totalSetter += sAmt;
       if (closer === rep) totalCloser += cAmt;
       if (status === 'Approved') totalApproved += earned;
@@ -2855,7 +2862,7 @@ function refreshCommPayoutSummary() {
       <td class="r" style="color:#60a5fa;">${F.$(totalSetter)}</td>
       <td class="r" style="color:#a78bfa;">${F.$(totalCloser)}</td>
       <td class="r" style="color:#3b82f6;font-weight:600;">${totalApproved > 0 ? F.$(totalApproved) : '—'}</td>
-      <td class="r" style="color:#6b7280;font-size:12px;" title="Held until full payment received">${totalOnHold>0?F.$(totalOnHold):'—'}</td>
+      <td class="r" style="color:#6b7280;font-size:12px;" title="Pending deposits, payable once approved">${totalOnHold>0?F.$(totalOnHold):'—'}</td>
     </tr>`;
   }).filter(Boolean).join('');
 
@@ -2906,7 +2913,7 @@ function renderCommissions() {
   });
 
   const approvedTotal = withComm
-    .filter(x => (x.f['Status']||'Pending') === 'Approved' && (x.f['Payment Type']||'Full Payment') !== 'Deposit')
+    .filter(x => (x.f['Status']||'Pending') === 'Approved' && !x.rec.pay?.excluded)
     .reduce((s,x) => s + x.comm.total, 0);
   const unassignedCount = withComm
     .filter(x => (x.f['Status']||'Pending') === 'Pending' && (x.f['Payment Type']||'Full Payment') !== 'Deposit' && (!x.setter || !x.closer))
@@ -2975,12 +2982,13 @@ function renderCommissions() {
     const status   = f['Status'] || 'Pending';
     const payType  = f['Payment Type'] || 'Full Payment';
     const isDeposit = payType === 'Deposit';
+    const held      = isHeldDeposit(f);
 
     const isRefunded = status === 'Refunded';
-    const commColor = isRefunded ? '#ef4444' : isDeposit ? '#6b7280' : '#10b981';
+    const commColor = isRefunded ? '#ef4444' : held ? '#6b7280' : '#10b981';
     const commLabel = isRefunded
       ? `<span style="font-size:10px;color:#ef4444;font-weight:600;">REFUNDED</span>`
-      : isDeposit
+      : held
         ? `<span style="font-size:10px;color:#f59e0b;font-weight:600;">ON HOLD</span>`
         : (comm.total > 0 ? F.$(comm.total) : '—');
 
@@ -2992,12 +3000,12 @@ function renderCommissions() {
     };
     const glow = STATUS_GLOW[status] || { accent: '#374151', bg: 'transparent' };
 
-    return `<tr data-rid="${rid}" style="background:${glow.bg}; ${isDeposit ? 'opacity:0.75;' : isRefunded ? 'opacity:0.6;' : ''}">
+    return `<tr data-rid="${rid}" style="background:${glow.bg}; ${held ? 'opacity:0.75;' : isRefunded ? 'opacity:0.6;' : ''}">
       <td style="border-left:3px solid ${glow.accent}; color:#d1d5db; font-weight:500; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${f['Lead Name']||'—'}</td>
       <td style="color:#6b7280; white-space:nowrap;">${f['Close Date']||'—'}${payTag(rec)}</td>
       <td class="r" style="color:#fff; font-weight:700; white-space:nowrap;">${F.$(deal)}</td>
       <td style="white-space:nowrap;">
-        <select class="comm-sel ${isDeposit?'unclaimed':''}" data-field="Payment Type" style="max-width:110px;">
+        <select class="comm-sel ${held?'unclaimed':''}" data-field="Payment Type" style="max-width:110px;">
           ${selOpts(PAY_TYPE_OPTS, payType)}
         </select>
       </td>
@@ -3014,8 +3022,8 @@ function renderCommissions() {
       <td style="text-align:center; vertical-align:middle;">
         <input type="checkbox" class="comm-chk" data-field="AI Setter" ${aiSet?'checked':''} title="AI Setter involved">
       </td>
-      <td class="r comm-s-cell" style="color:${(isDeposit||isRefunded)?'#6b7280':'#60a5fa'}; font-size:12px; white-space:nowrap;">${(isDeposit||isRefunded)?'—':(comm.sPct>0?comm.sPct+'% / '+F.$(comm.sAmt):'—')}</td>
-      <td class="r comm-c-cell" style="color:${(isDeposit||isRefunded)?'#6b7280':'#a78bfa'}; font-size:12px; white-space:nowrap;">${(isDeposit||isRefunded)?'—':(comm.cPct>0?comm.cPct+'% / '+F.$(comm.cAmt):'—')}</td>
+      <td class="r comm-s-cell" style="color:${(held||isRefunded)?'#6b7280':'#60a5fa'}; font-size:12px; white-space:nowrap;">${(held||isRefunded)?'—':(comm.sPct>0?comm.sPct+'% / '+F.$(comm.sAmt):'—')}</td>
+      <td class="r comm-c-cell" style="color:${(held||isRefunded)?'#6b7280':'#a78bfa'}; font-size:12px; white-space:nowrap;">${(held||isRefunded)?'—':(comm.cPct>0?comm.cPct+'% / '+F.$(comm.cAmt):'—')}</td>
       <td class="r comm-t-cell" style="font-weight:700; color:${commColor}; font-size:14px; white-space:nowrap;">${commLabel}</td>
       <td style="color:#6b7280; font-size:12px; white-space:nowrap;">${f['Pay Period']||'—'}</td>
       <td>
@@ -3087,7 +3095,7 @@ function renderCommissions() {
       const closer     = rec.fields['Closer'] || '';
       const aiSet      = !!rec.fields['AI Setter'];
       const comm       = calcComm(deal, setter, closer, aiSet);
-      const isDeposit  = (rec.fields['Payment Type'] || 'Full Payment') === 'Deposit';
+      const held       = isHeldDeposit(rec.fields);
       const isRefunded = (rec.fields['Status'] || '') === 'Refunded';
 
       const patchFields = { [field]: value };
@@ -3096,14 +3104,14 @@ function renderCommissions() {
       const sCell = tr.querySelector('.comm-s-cell');
       const cCell = tr.querySelector('.comm-c-cell');
       const tCell = tr.querySelector('.comm-t-cell');
-      if (isDeposit) {
+      if (held) {
         sCell.textContent = '—'; sCell.style.color = '#6b7280';
         cCell.textContent = '—'; cCell.style.color = '#6b7280';
         tCell.innerHTML = '<span style="font-size:10px;color:#f59e0b;font-weight:600;">ON HOLD</span>';
         tCell.style.color = '#f59e0b';
         tr.style.opacity = '0.75';
         const statusSel = tr.querySelector('[data-field="Status"]');
-        if (statusSel) { statusSel.disabled = true; statusSel.title = 'Deposit — held until fully paid'; }
+        if (statusSel) { statusSel.disabled = false; statusSel.title = 'Set to Approved to pay this deposit out'; }
       } else if (isRefunded) {
         sCell.textContent = '—'; sCell.style.color = '#6b7280';
         cCell.textContent = '—'; cCell.style.color = '#6b7280';
@@ -3133,7 +3141,10 @@ function renderCommissions() {
       // Update unclaimed styling on the select
       if (field === 'Setter') el.className = 'comm-sel' + (!value ? ' unclaimed' : '');
       if (field === 'Closer') el.className = 'comm-sel' + (!value ? ' unclaimed' : '');
-      if (field === 'Payment Type') el.className = 'comm-sel' + (isDeposit ? ' unclaimed' : '');
+      if (field === 'Payment Type' || field === 'Status') {
+        const ptSel = tr.querySelector('[data-field="Payment Type"]');
+        if (ptSel) ptSel.className = 'comm-sel' + (held ? ' unclaimed' : '');
+      }
 
       // Re-apply glow when status changes
       if (field === 'Status') {
@@ -3184,9 +3195,11 @@ function renderCommissions() {
   // Totals footer
   const fullPayment = filtered.filter(x => (x.f['Payment Type']||'Full Payment') !== 'Deposit');
   const deposits    = filtered.filter(x => (x.f['Payment Type']||'Full Payment') === 'Deposit');
-  const totalComm   = fullPayment.reduce((s,x) => s + x.comm.total, 0);
+  // Payable = everything earned except Pending deposits, refunds and rows no payment backs
+  const payable     = filtered.filter(x => !isHeldDeposit(x.f) && (x.f['Status']||'') !== 'Refunded' && !x.rec.pay?.excluded);
+  const totalComm   = payable.reduce((s,x) => s + x.comm.total, 0);
   const totalDeals  = filtered.reduce((s,x) => s + x.deal, 0);
-  const onHold      = deposits.reduce((s,x) => s + x.comm.total, 0);
+  const onHold      = filtered.filter(x => isHeldDeposit(x.f)).reduce((s,x) => s + x.comm.total, 0);
   const unclaimed   = fullPayment.filter(x => (!x.setter || x.setter==='Unassigned') && (!x.closer || x.closer==='Unassigned')).length;
   document.getElementById('comm-totals').innerHTML = `
     <span style="font-size:12px; color:#6b7280;">${filtered.length} deals (${deposits.length} deposits)</span>
