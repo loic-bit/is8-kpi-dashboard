@@ -590,6 +590,8 @@ def platform_stats():
 # payment that has none, and annotate_commissions() flags rows no payment backs.
 
 WHOP_KEY = os.environ.get('WHOP_API_KEY', '')
+WHOP_API = 'https://api.whop.com/api/v1'      # Whop's current API; /api/v2 passed its sunset date on 2026-11-13
+WHOP_VERSION = '2026-08-21-1'                 # Api-Version-Date: the dated version these field names belong to
 COMMAS_KEY = os.environ.get('COMMAS_API_KEY', '')
 TRACKER_START = '2026-04-01'     # earlier payments are revenue history only, never commission rows
 MANUAL_PREFIXES = ('WIRE-', 'ZELLE-', 'MANUAL-', 'CASH-', 'CHECK-')   # off-processor payments Loic approved
@@ -624,7 +626,7 @@ def biz_date(ts):
 
 
 LEDGER = {'payments': {}, 'loaded': False, 'whop_full_at': 0.0, 'fetched_at': 0.0, 'next_at': 0.0,
-          'busy': False, 'want': False, 'done_started': 0.0, 'error': None, 'reconcile': None, 'emails': {}}
+          'busy': False, 'want': False, 'done_started': 0.0, 'error': None, 'reconcile': None, 'whop_company': None}
 LEDGER_LOCK = threading.Lock()
 PROC_DONE = threading.Condition()
 PROC_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix='proc')
@@ -636,28 +638,50 @@ def http_json(url, headers, timeout=60):
         return json.loads(r.read())
 
 
+def whop_get(path):
+    return http_json(WHOP_API + path, {'Authorization': 'Bearer ' + WHOP_KEY, 'Api-Version-Date': WHOP_VERSION})
+
+
+def whop_company():
+    """The business the key belongs to (biz_...). The payments list refuses to answer without it."""
+    if not LEDGER['whop_company']:
+        LEDGER['whop_company'] = whop_get('/accounts/me')['id']
+    return LEDGER['whop_company']
+
+
 def fetch_whop(full):
-    out, page = {}, 1
+    # Newest first, 50 a page, the next page by cursor. Whop leaves $0 payments out of this list.
+    out, page, after = {}, 1, None
     while True:
-        d = http_json('https://api.whop.com/api/v2/payments?per=50&page=%d' % page, {'Authorization': 'Bearer ' + WHOP_KEY})
+        q = {'company_id': whop_company(), 'first': 50}
+        if after:
+            q['after'] = after
+        d = whop_get('/payments?' + urllib.parse.urlencode(q))
         for w in d.get('data') or []:
             out[w['id']] = w
-        last = (d.get('pagination') or {}).get('total_page') or 1
-        if page >= last or (not full and page >= 2):
+        info = d.get('page_info') or {}
+        after = info.get('end_cursor')
+        if not info.get('has_next_page') or not after or (not full and page >= 2):
             return out
         page += 1
 
 
+def whop_ts(s):
+    """Unix seconds of one of Whop's times ('2026-11-14T22:26:29.812Z'), None when it is empty."""
+    return int(datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()) if s else None
+
+
 def whop_entry(w):
-    gross = float(w.get('final_amount') or 0)
+    gross = float(w.get('total') or 0)
     if w.get('status') != 'paid' or gross < 2:
         return None
     refunded = float(w.get('refunded_amount') or 0)
-    ts = w.get('paid_at') or w.get('created_at') or time.time()
+    ts = whop_ts(w.get('paid_at')) or whop_ts(w.get('created_at')) or time.time()
     return {'id': w['id'], 'source': 'Whop', 'ts': ts, 'date': biz_date(ts), 'gross': gross,
             'refunded': refunded, 'net': round(gross - refunded, 2),
-            'name': ('%s %s' % (w.get('billing_first_name') or '', w.get('billing_last_name') or '')).strip(),
-            'email': None, 'membership': w.get('membership')}
+            'name': ((w.get('billing_address') or {}).get('name') or '').strip(),
+            'email': ((w.get('user') or {}).get('email') or '').lower() or None,
+            'membership': (w.get('membership') or {}).get('id')}
 
 
 def fetch_commas():
@@ -733,19 +757,6 @@ def sync_processors():
         log('[proc] ' + '; '.join(errors))
 
 
-def whop_email(membership):
-    if not membership or not WHOP_KEY:
-        return None
-    cache = LEDGER['emails']
-    if membership not in cache:
-        try:
-            m = http_json('https://api.whop.com/api/v2/memberships/' + membership, {'Authorization': 'Bearer ' + WHOP_KEY})
-            cache[membership] = (m.get('email') or '').lower() or None
-        except Exception:
-            return None
-    return cache[membership]
-
-
 def commission_math(f, amount):
     """Commission dollars from the row's own percentages, the way the tracker computes them."""
     s = float(f.get('Setter Commission %') or 0)
@@ -805,7 +816,7 @@ def reconcile():
         log('[reconcile] ' + summary['held'])
         return summary
     for p in creates:
-        email = p['email'] or whop_email(p['membership'])
+        email = p['email']
         fields = {'Lead Name': p['name'] or '(no name on payment)', 'Deal Amount': p['net'], 'Close Date': p['date'],
                   'Whop Payment ID': p['id'], 'Status': 'Pending', 'AI Setter': False,
                   'Notes': '%s: created from the %s payment by the dashboard (no tracker row existed). Assign Setter/Closer.' % (today, p['source'])}
